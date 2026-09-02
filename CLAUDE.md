@@ -241,10 +241,21 @@ model Moderator {
 
 ## Core GraphQL endpoints (priority 1 implementation order)
 
-- `rootComments(page, sortBy, sortOrder)` — pagination (25/page) + sorting of top-level
-  comments by username/email/date; returns `repliesCount` without nested data
-- `commentThread(rootId)` — the full reply tree in one request (recursive CTE in Postgres,
-  since Prisma doesn't support recursive relations out of the box)
+- `rootComments(page: Int, sortBy: RootCommentSortField, sortOrder: SortOrder): RootCommentsPage!`
+  — **implemented**. Top-level comments only (`parentId IS NULL`, `isHidden = false`),
+  25/page. `RootCommentSortField = USERNAME | EMAIL | CREATED_AT` (default `CREATED_AT`,
+  `sortOrder` default `DESC` → LIFO). Returns `RootCommentsPage { items: [CommentModel!]!,
+  totalCount, page, totalPages }`; each item carries `repliesCount` (direct, non-hidden
+  replies via Prisma `_count`) and **no** nested replies. Result cached in Redis
+  (`rootComments:{page}:{sortBy}:{sortOrder}`, 45 s TTL); the whole `rootComments:*`
+  keyspace is busted on every `createComment`.
+- `commentThread(rootId: ID!): ThreadCommentModel!` — **implemented**. One recursive CTE
+  (`$queryRaw`, parameterized) fetches the root + all descendants at any depth in one
+  round-trip, JOINing author and attachment; the service reassembles the flat rows into a
+  nested `ThreadCommentModel { …, attachment, replies: [ThreadCommentModel!]! }` with each
+  level ordered newest-first (LIFO). 404 if `rootId` is unknown or is itself a reply
+  (the CTE anchor requires `parentId IS NULL`). SQL-injection-safe: a metacharacter id
+  just yields an empty result → clean 404.
 - `createComment(input: CreateCommentInput!): CommentModel!` — **implemented**.
   `CreateCommentInput { username, email, homepage?, text, parentId?, captchaToken,
   captchaAnswer, attachmentId? }`. Flow: verify CAPTCHA (one-time) → field validation
@@ -447,7 +458,54 @@ Manual GraphQL check: `captchaChallenge` → solve → `createComment` creates t
 wrong CAPTCHA, `<script>`, `<img onerror>`, `javascript:` href, unclosed/mis-nested tags,
 bad username/email, and replies to a missing parent all rejected with clear coded errors.
 
+---
+
+### Step 3 — rootComments (paginated/sorted/cached) + commentThread (recursive CTE) (done)
+
+**Implemented**
+- **`rootComments`** query — see "Core GraphQL endpoints" above. New:
+  `RootCommentsArgs extends PaginationArgs` (+ `sortBy`), `RootCommentSortField` enum,
+  `RootCommentsPage` model. Sort by date / `author.username` / `author.email` (Prisma
+  related-field `orderBy`), 25/page from `ROOT_COMMENTS_PER_PAGE`, `_count` filtered to
+  non-hidden replies.
+- **Redis caching** — `CacheService.delByPattern` (SCAN-based) added; new
+  `shared/constants/cache.constants.ts` (`rootComments:` prefix, 45 s TTL). Cache hit
+  path revives ISO strings back to `Date` (`reviveRootPage`). `createComment` busts
+  `rootComments:*` after every successful create.
+- **`commentThread`** query — `getCommentThread` runs one recursive CTE via
+  parameterized `$queryRaw`, JOIN author + LEFT JOIN attachment, `ORDER BY depth ASC,
+  createdAt DESC`; service reassembles flat rows into a nested `ThreadCommentModel`
+  (recursive), LIFO per level. New models: `ThreadCommentModel`, `AttachmentModel`,
+  `AttachmentType` GraphQL enum (`modules/attachments/{models,enums}`).
+- `includeStacktraceInErrorResponses: false` added to the Apollo config (was leaking
+  stack traces in error `extensions`).
+- `test/jest-e2e.json`: `maxWorkers: 1` (DB-backed e2e must be serial).
+- Tests: **46 unit** (was 30; +16 for rootComments sort/pagination/cache-hit-miss and
+  commentThread tree/recursion/injection-param/404) and **19 e2e** (was 9; new
+  `comments-read.e2e-spec.ts` truncates the DB, seeds a 4-level tree, checks LIFO order,
+  every sort field + direction, empty page past the end, cache populate + bust,
+  thread nesting/LIFO, 404 for unknown id and for a reply id, and an injection-string
+  rootId that 404s cleanly with the table intact afterward).
+
+**Deviations from the plan (with reasons)**
+- `repliesCount` = **direct** replies (Prisma `_count` on the `replies` relation), as the
+  step brief specified — not the whole-subtree count. Applies to both `rootComments`
+  items and `ThreadCommentModel` nodes.
+- Cache is busted on **every** `createComment`, not only new roots — a reply changes its
+  root's `repliesCount` in the cached list. Still "flush `rootComments:*`", still cheap.
+- `rootComments` excludes `isHidden` comments; `commentThread` does **not** filter
+  `isHidden` (keeps the tree intact). Moot until moderation exists; revisit in step 4.
+- `commentThread` has no recursion depth cap — brief says unlimited depth, and cycles are
+  unconstructable (immutable `parentId`).
+
+**Verified**: build / lint / 46 unit / 19 e2e green. Manual: seeded a 4-level thread,
+`rootComments` returns LIFO + correct `repliesCount` + working sort/pagination + cache
+populate/bust; `commentThread` returns the full nested tree LIFO-ordered; a reply id and
+`'1) OR 1=1; DROP TABLE authors;--'` both return a clean `NOT_FOUND` with the DB intact.
+
 **Pending — next**
-- `rootComments` (pagination + sort + LIFO + `repliesCount`, Redis-cached) and
-  `commentThread` (recursive CTE).
-- `uploadAttachment` + RabbitMQ image resize; JWT/Moderator guard in `core/guards/`.
+- `uploadAttachment` (file upload → Attachment row) + RabbitMQ worker for image resize
+  (320×240) / text-file validation (100 KB); link into `commentThread`/`createComment`.
+- JWT/Moderator guard in `core/guards/` + `hideComment` / `banAuthor` mutations; then
+  apply `isHidden` filtering consistently.
+- WebSocket `commentCreated` event (`modules/gateway`).

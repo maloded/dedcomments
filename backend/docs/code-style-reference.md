@@ -189,6 +189,33 @@ The comment-body sanitizer is the primary XSS defence. Design decisions:
   auto-fixing, and the stored value renders identically.
 - `SanitizerModule` is `@Global` (comments now, live-preview resolver later).
 
+## Raw SQL / recursive queries
+
+- Prisma has no recursive relation loading, so tree reads (`commentThread`) use a
+  **recursive CTE** via `prismaService.$queryRaw` — the **tagged-template** form only, so
+  every interpolated value (`${rootId}`) is a bound parameter (`$1`). **Never**
+  `$queryRawUnsafe` or string concatenation for anything user-supplied (brief:
+  SQL-injection protection). A junk / metacharacter id just matches nothing → clean 404.
+- Column identifiers are quoted (`"parentId"`, `"createdAt"`) — Prisma keeps field names
+  camelCase in Postgres, which is case-folded unless quoted. Postgres enum columns are
+  cast `::text` in the SELECT so the driver returns a plain string.
+- The flat rows are reassembled into the nested `@ObjectType` tree in the service
+  (a `Map<id, node>` pass), ordering each level newest-first (LIFO).
+- No cycle guard needed: `parentId` is only ever set at creation to an existing comment,
+  and comments are immutable — a cycle is unconstructable.
+
+## Redis caching
+
+- `CacheService` (`modules/cache`, `@Global`) wraps one `ioredis` connection:
+  `get/set(+TTL)/del/delByPattern` + `getJson/setJson`.
+- **JSON round-trip loses types.** `setJson`/`getJson` turn `Date` into an ISO string, so
+  a cache *hit* must revive them (`new Date(...)`) before returning — the GraphQL
+  `DateTime` scalar rejects strings. See `CommentsService.reviveRootPage`.
+- Cache keys are namespaced (`rootComments:{page}:{sortBy}:{sortOrder}`). Invalidation is
+  coarse: `delByPattern('rootComments:*')` on **every** `createComment` (a reply changes
+  a root's `repliesCount` too, not just new roots). TTL is short (45 s) as a backstop.
+- `delByPattern` uses `SCAN`, never `KEYS` (which blocks Redis).
+
 ## Docker Compose (DedCinema pattern)
 
 - One `docker-compose.yml` at the repo root; each backing service gets a

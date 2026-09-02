@@ -10,10 +10,10 @@ import Redis from 'ioredis';
 /**
  * Thin wrapper over a single ioredis connection. Used for:
  *   - one-time CAPTCHA answers (short TTL, see CaptchaService)
- *   - the top-level comments list cache (added in a later step)
+ *   - the top-level comments list cache (see CommentsService.getRootComments)
  *
- * Kept deliberately small — `get` / `set` (+ optional TTL) / `del` plus JSON
- * helpers. ioredis handles reconnection on its own.
+ * Kept deliberately small — `get` / `set` (+ optional TTL) / `del` /
+ * `delByPattern` plus JSON helpers. ioredis handles reconnection on its own.
  */
 @Injectable()
 export class CacheService implements OnModuleInit, OnModuleDestroy {
@@ -57,6 +57,29 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
 
 	public async del(key: string): Promise<void> {
 		await this.client.del(key);
+	}
+
+	/**
+	 * Delete every key matching a glob pattern (e.g. `rootComments:*`). Uses
+	 * SCAN in batches — never `KEYS`, which blocks the server.
+	 */
+	public async delByPattern(pattern: string): Promise<number> {
+		let cursor = '0';
+		let deleted = 0;
+		do {
+			const [next, keys] = await this.client.scan(
+				cursor,
+				'MATCH',
+				pattern,
+				'COUNT',
+				200,
+			);
+			cursor = next;
+			if (keys.length > 0) {
+				deleted += await this.client.del(...keys);
+			}
+		} while (cursor !== '0');
+		return deleted;
 	}
 
 	public async getJson<T>(key: string): Promise<T | null> {

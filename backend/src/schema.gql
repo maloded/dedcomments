@@ -2,6 +2,23 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+type AttachmentModel {
+  id: ID!
+  originalName: String!
+  processedAt: DateTime
+
+  """Size in bytes."""
+  size: Int!
+  type: AttachmentType!
+  url: String!
+}
+
+"""Kind of comment attachment: an image or a text file."""
+enum AttachmentType {
+  IMAGE
+  TEXT
+}
+
 type AuthorModel {
   createdAt: DateTime!
   email: String!
@@ -29,9 +46,7 @@ type CommentModel {
   """null for a top-level comment, otherwise the parent id."""
   parentId: ID
 
-  """
-  Number of direct replies. (The root-list query will populate the full subtree count; on a freshly created comment this is 0.)
-  """
+  """Number of direct (non-hidden) replies. 0 on a freshly created comment."""
   repliesCount: Int!
   text: String!
 }
@@ -77,4 +92,64 @@ type Query {
   Generate a fresh CAPTCHA (token + SVG image). Solve it and pass `token` + answer to `createComment`.
   """
   captchaChallenge: CaptchaChallengeModel!
+
+  """
+  The full reply tree for one top-level comment, in a single request. Replies are newest-first at every level.
+  """
+  commentThread(rootId: ID!): ThreadCommentModel!
+
+  """
+  Paginated list of top-level comments (25/page) with per-item reply counts. Default order: newest first (LIFO).
+  """
+  rootComments(
+    """1-based page number."""
+    page: Int! = 1
+
+    """Column to sort by. Default: CREATED_AT."""
+    sortBy: RootCommentSortField! = CREATED_AT
+
+    """Sort direction. Defaults to DESC (LIFO — newest first)."""
+    sortOrder: SortOrder! = DESC
+  ): RootCommentsPage!
+}
+
+"""Sort key for the top-level comments list. Default: CREATED_AT (LIFO)."""
+enum RootCommentSortField {
+  CREATED_AT
+  EMAIL
+  USERNAME
+}
+
+type RootCommentsPage {
+  items: [CommentModel!]!
+
+  """1-based current page."""
+  page: Int!
+
+  """Total number of top-level comments."""
+  totalCount: Int!
+
+  """Total pages at 25 items per page."""
+  totalPages: Int!
+}
+
+"""Sort direction; DESC (newest first / LIFO) is the default."""
+enum SortOrder {
+  ASC
+  DESC
+}
+
+type ThreadCommentModel {
+  attachment: AttachmentModel
+  author: AuthorModel!
+  createdAt: DateTime!
+  id: ID!
+  parentId: ID
+
+  """Direct replies, newest first."""
+  replies: [ThreadCommentModel!]!
+
+  """Number of direct replies (= replies.length)."""
+  repliesCount: Int!
+  text: String!
 }

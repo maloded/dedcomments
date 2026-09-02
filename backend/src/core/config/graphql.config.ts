@@ -16,6 +16,8 @@ export function getGraphQLConfig(
 	return {
 		autoSchemaFile: join(process.cwd(), 'src/schema.gql'),
 		sortSchema: true,
+		// Don't leak server stack traces in GraphQL error responses.
+		includeStacktraceInErrorResponses: false,
 		// The classic graphql-playground plugin is not compatible with Apollo
 		// Server 5, so we serve Apollo's embedded Sandbox at /graphql instead.
 		playground: false,

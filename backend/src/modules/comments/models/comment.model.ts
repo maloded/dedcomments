@@ -25,8 +25,7 @@ export class CommentModel {
 
 	@Field(() => Int, {
 		description:
-			'Number of direct replies. (The root-list query will populate the ' +
-			'full subtree count; on a freshly created comment this is 0.)',
+			'Number of direct (non-hidden) replies. 0 on a freshly created comment.',
 	})
 	public repliesCount: number;
 
