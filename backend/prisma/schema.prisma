@@ -1,0 +1,109 @@
+// Comments SPA — Prisma schema
+// Domain: anonymous authors leave tree-structured comments (Habr/Disqus style),
+// optionally with one attachment. Moderators (JWT) can moderate.
+// See CLAUDE.md → "Prisma schema (draft, reference)" and "Domain model".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// An anonymous comment author. NOT an account with a password — identified by
+/// username + email captured at submission time. The same email can recur across
+/// comments; we keep it as its own row so the root table can sort/aggregate by author.
+model Author {
+  id       String  @id @default(uuid())
+  username String
+  email    String
+  homepage String?
+
+  comments Comment[]
+
+  createdAt DateTime @default(now())
+
+  // Root-list sorting/pagination is by Author.username / Author.email (brief §3.2).
+  @@index([username])
+  @@index([email])
+  @@map("authors")
+}
+
+/// The core entity. Immutable after creation (no edits in the brief).
+/// Root comment when parentId is null, otherwise a reply — a tree of unlimited depth.
+model Comment {
+  id       String @id @default(uuid())
+  text     String
+  authorId String
+  author   Author @relation(fields: [authorId], references: [id])
+
+  parentId String?
+  parent   Comment?  @relation("Replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies  Comment[] @relation("Replies")
+
+  attachment Attachment?
+
+  // Moderation (JWT / Moderator role). Hidden comments stay in the tree structure
+  // but are filtered out of public queries.
+  isHidden Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  // Default sort is LIFO by createdAt (brief §5); root list also sorts by date.
+  @@index([createdAt])
+  // Fetching a root's subtree and listing top-level comments both filter on parentId.
+  @@index([parentId])
+  @@index([parentId, createdAt])
+  @@map("comments")
+}
+
+enum AttachmentType {
+  IMAGE
+  TEXT
+}
+
+/// Optional single attachment on a comment: a (resized) image or a text file.
+model Attachment {
+  id           String         @id @default(uuid())
+  commentId    String         @unique
+  comment      Comment        @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  type         AttachmentType
+  url          String
+  originalName String
+  size         Int
+  // Set once the RabbitMQ worker has resized/validated the file.
+  processedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@map("attachments")
+}
+
+/// A protected moderator account, authenticated via JWT. The only "real" login in
+/// the system; used for hideComment / banAuthor mutations.
+model Moderator {
+  id           String @id @default(uuid())
+  username     String @unique
+  passwordHash String
+
+  createdAt DateTime @default(now())
+
+  @@map("moderators")
+}
+
+/// One-time CAPTCHA token: created when the form opens, checked on submit, then
+/// invalidated (consumedAt set). Expired/consumed rows are swept periodically.
+model CaptchaChallenge {
+  id        String   @id @default(uuid())
+  // Hash of the expected answer — never store the plaintext solution.
+  answerHash String
+  expiresAt DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("captcha_challenges")
+}
