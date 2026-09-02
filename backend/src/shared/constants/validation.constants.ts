@@ -30,7 +30,25 @@ export const ALLOWED_IMAGE_MIME_TYPES = [
 	'image/png',
 	'image/gif',
 ] as const;
+export const ALLOWED_IMAGE_EXTENSIONS = [
+	'.jpg',
+	'.jpeg',
+	'.png',
+	'.gif',
+] as const;
 
 /** Text attachments: plain-text only, hard cap 100 KB. */
 export const TEXT_FILE_MAX_BYTES = 100 * 1024;
 export const ALLOWED_TEXT_MIME_TYPES = ['text/plain'] as const;
+export const ALLOWED_TEXT_EXTENSIONS = ['.txt'] as const;
+
+/**
+ * Hard ceiling on the raw upload payload (before an image is resized). Generous —
+ * the real limits are the ones above — but stops someone streaming a huge file.
+ * The HTTP JSON body limit (main.ts) is set a bit above this to leave room for
+ * base64 (~+33%) + the GraphQL envelope.
+ */
+export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+/** Express JSON body-parser limit — must comfortably exceed a base64'd MAX_UPLOAD_BYTES. */
+export const HTTP_BODY_LIMIT = '12mb';

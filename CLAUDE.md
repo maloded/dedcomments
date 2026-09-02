@@ -121,9 +121,10 @@ The brief has no explicit "admin," but JWT is required from Junior+ level. A mea
 of it in this domain is moderation: hiding spam comments, banning by email/username. A
 separate protected role, authenticated via JWT, with access to moderation mutations.
 
-### CaptchaChallenge
-A one-time token: generated when the comment form is opened, verified on submit, then
-invalidated.
+### CAPTCHA challenge (not a DB entity)
+A one-time token generated when the comment form is opened, verified on submit, then
+invalidated. Stored in **Redis** (key = token, value = expected answer, with a TTL) — not
+in Postgres. There is deliberately no `CaptchaChallenge` table.
 
 ---
 
@@ -267,8 +268,17 @@ model Moderator {
 - `captchaChallenge: CaptchaChallengeModel!` — **implemented**. Returns
   `{ token, image (SVG data URL), expiresAt }`; the expected answer is stored in Redis
   under the token with a TTL (`CAPTCHA_TTL_SECONDS`). Verified once, then invalidated.
-- `uploadAttachment` — file upload; image resizing and size validation handled via the
-  RabbitMQ queue
+- `uploadAttachment(input: UploadAttachmentInput!): AttachmentModel!` — **implemented**.
+  `UploadAttachmentInput { filename, mimeType, data }` — `data` is the file bytes
+  **base64-encoded** (not multipart `Upload`; a `data:` URL prefix is accepted). One
+  image (JPG/GIF/PNG) or a `.txt` ≤ 100 KB. Validates MIME + extension + magic bytes
+  before writing. Images: stored as-is, an `Attachment` row is created with
+  `processedAt = null`, and a job is published to the `attachment.resize` RabbitMQ queue;
+  the consumer (same process) resizes proportionally to fit **320×240** with `sharp`,
+  overwrites the file and stamps `processedAt` + `size`. Text: validated + stored
+  synchronously, `processedAt` set immediately. Files are served read-only at
+  `/uploads/*`. Returns `AttachmentModel { id, type, url, originalName, size, processedAt }`;
+  its `id` goes into `createComment(attachmentId:)`.
 - Moderator mutations (`hideComment`, `banAuthor`) — behind a JWT guard, after the core
   endpoints MVP
 
@@ -509,3 +519,60 @@ populate/bust; `commentThread` returns the full nested tree LIFO-ordered; a repl
 - JWT/Moderator guard in `core/guards/` + `hideComment` / `banAuthor` mutations; then
   apply `isHidden` filtering consistently.
 - WebSocket `commentCreated` event (`modules/gateway`).
+
+---
+
+### Step 4 — attachment upload + RabbitMQ resize; drop CaptchaChallenge (done)
+
+**Cleanup**
+- Removed the unused `CaptchaChallenge` Prisma model (CAPTCHA state lives in Redis).
+  Migration `20260902153834_drop_captcha_challenge` drops `captcha_challenges`. No code
+  referenced it (the GraphQL `CaptchaChallengeModel` is a separate, still-used type).
+  Domain model section updated.
+
+**Implemented — `modules/attachments`**
+- `uploadAttachment(input): AttachmentModel!` — see "Core GraphQL endpoints". Full
+  validation (MIME + extension + image magic bytes + text UTF-8/size) *before* touching
+  disk; all failures → `BadRequestException`.
+- `AttachmentStorageService` — local disk (`UPLOADS_DIR`, flat `<id><ext>`), served at
+  `/uploads/*` (`useStaticAssets` in `main.ts`).
+- `ImageProcessingService` — `sharp` wrapper (`fit: 'inside'`, `withoutEnlargement`,
+  EXIF-rotate); unit-tested in isolation.
+- `AttachmentsConsumer` — `@EventPattern('attachment.resize')` on a `@Controller`;
+  manual ack, `nack` w/o requeue on unrecoverable errors. Same process as the API
+  (monolith) via `app.connectMicroservice` + `startAllMicroservices` (added to `main.ts`
+  and `createTestApp`). Producer: `ClientsModule.registerAsync` → `ClientProxy`.
+- Text files: validated + stored synchronously, `processedAt` set on upload (no queue).
+- `createComment(attachmentId:)` linking was already correct (Step 2) — verified: links
+  an unlinked attachment in the create transaction, `NOT_FOUND` for an unknown id,
+  `BAD_REQUEST` for an already-linked one.
+- `main.ts`: `useBodyParser('json', { limit: '12mb' })` — Express's 100 KB default 413s
+  every image upload.
+- Deps added: `@nestjs/microservices`, `amqplib`, `amqp-connection-manager`, `sharp`.
+- Env: `RABBITMQ_ATTACHMENTS_QUEUE` default renamed to `attachment.resize`; new
+  `UPLOADS_DIR`.
+
+**Deviations (with reasons)**
+- **base64-in-GraphQL upload, not `graphql-upload`/multipart.** `graphql-upload@16+` is
+  ESM-only and breaks the CJS + ts-jest setup (same wall as `htmlparser2` / old
+  `@nestjs/config`). File limits here are tiny, so base64 overhead is irrelevant, and it
+  keeps upload a first-class GraphQL mutation that's trivially testable. Signature is
+  `uploadAttachment(input: UploadAttachmentInput!)` rather than `(file: Upload!)`.
+- Monolith consumer (same process), not a separate service — matches the "monolith is
+  sufficient" note in the brief.
+- `amqplib@2` + `amqp-connection-manager@5` (both current latest) — verified working in
+  dev and in the alpine Docker image.
+- e2e must run with the dev server **stopped** (shared RabbitMQ queue). Noted in
+  `create-test-app.ts` and code-style-reference.
+
+**Verified**: build / lint / **64 unit** / **29 e2e** green. Docker image builds on
+`node:20-alpine` and boots (sharp + amqp load fine). Manual before/after:
+1920×1080 → 320×180, 600×900 → 160×240, 240×180 → unchanged (all fit 320×240, aspect
+preserved); upload → queue → `processedAt` stamped → `createComment` links the id →
+`commentThread` shows the attachment.
+
+**Pending — next**
+- JWT/Moderator guard in `core/guards/` + `hideComment` / `banAuthor`; apply `isHidden`
+  filtering consistently.
+- WebSocket `commentCreated` event (`modules/gateway`).
+- Deployment + XSS/SQLi security pass + README.

@@ -101,17 +101,5 @@ model Moderator {
   @@map("moderators")
 }
 
-/// One-time CAPTCHA token: created when the form opens, checked on submit, then
-/// invalidated (consumedAt set). Expired/consumed rows are swept periodically.
-model CaptchaChallenge {
-  id        String   @id @default(uuid())
-  // Hash of the expected answer — never store the plaintext solution.
-  answerHash String
-  expiresAt DateTime
-  consumedAt DateTime?
-
-  createdAt DateTime @default(now())
-
-  @@index([expiresAt])
-  @@map("captcha_challenges")
-}
+// NOTE: CAPTCHA challenges are stored in Redis (keyed by token, with a TTL), not
+// in Postgres — see modules/captcha. There is deliberately no CaptchaChallenge model.

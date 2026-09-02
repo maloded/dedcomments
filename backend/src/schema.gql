@@ -85,6 +85,11 @@ type Mutation {
   Post a comment (or a reply, via `parentId`). Requires a solved CAPTCHA. Returns the created comment.
   """
   createComment(input: CreateCommentInput!): CommentModel!
+
+  """
+  Upload one image (JPG/GIF/PNG) or text file (.txt ≤ 100 KB). Images are resized to fit 320×240 on a background queue; check `processedAt`. Pass the returned `id` to `createComment(attachmentId:)` to attach it.
+  """
+  uploadAttachment(input: UploadAttachmentInput!): AttachmentModel!
 }
 
 type Query {
@@ -152,4 +157,19 @@ type ThreadCommentModel {
   """Number of direct replies (= replies.length)."""
   repliesCount: Int!
   text: String!
+}
+
+input UploadAttachmentInput {
+  """
+  File bytes, base64-encoded. A `data:<mime>;base64,` prefix is also accepted.
+  """
+  data: String!
+
+  """
+  Original file name — its extension is validated and it is kept for display.
+  """
+  filename: String!
+
+  """MIME type: image/jpeg | image/png | image/gif | text/plain."""
+  mimeType: String!
 }

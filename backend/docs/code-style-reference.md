@@ -216,6 +216,42 @@ The comment-body sanitizer is the primary XSS defence. Design decisions:
   a root's `repliesCount` too, not just new roots). TTL is short (45 s) as a backstop.
 - `delByPattern` uses `SCAN`, never `KEYS` (which blocks Redis).
 
+## Attachment uploads (`modules/attachments`)
+
+- **Transport: base64 inside a normal GraphQL mutation**, not `graphql-upload`
+  (multipart). `graphql-upload@16+` is ESM-only and fights our CJS + ts-jest setup (same
+  class of pain as `htmlparser2`/`@nestjs/config`); the file-size limits here are tiny
+  (text ≤ 100 KB, images resized to 320×240), so the ~33% base64 overhead is a non-issue.
+  `UploadAttachmentInput { filename, mimeType, data }`; a `data:` URL prefix is stripped.
+- The Express JSON body limit is raised to `HTTP_BODY_LIMIT` (12 MB) in `main.ts` /
+  `createTestApp` — the default 100 KB would 413 every image upload.
+- **Validation happens before anything is written**: MIME must be an allowed image or
+  `text/plain`; extension must match; images are magic-byte sniffed (defeats a spoofed
+  MIME); text must be NUL-free valid UTF-8 and ≤ 100 KB. All failures →
+  `BadRequestException`.
+- **Storage** is local disk (`AttachmentStorageService`, `UPLOADS_DIR`, flat
+  `<id><ext>` files), served read-only at `/uploads/*` via `useStaticAssets`. Swap for S3
+  later without touching the service/consumer.
+- **Async resize**: an image upload creates an unprocessed row (`processedAt = null`) and
+  emits `attachment.resize` to RabbitMQ; the consumer (`AttachmentsConsumer`, same
+  process — monolith) resizes with `sharp` (`fit: 'inside'`, `withoutEnlargement`),
+  overwrites the file, and stamps `processedAt` + the new `size`. Text needs no
+  processing — `processedAt` is set on upload.
+- The upload mutation only creates the `Attachment`; `commentId` stays null until
+  `createComment(attachmentId:)` links it (one-to-one, rejects an already-linked id).
+
+## RabbitMQ / `@nestjs/microservices`
+
+- Hybrid app: `NestFactory.create` (HTTP) + `app.connectMicroservice({ transport: RMQ })`
+  + `startAllMicroservices()` in `main.ts` **and** `createTestApp` (so e2e drains the
+  queue). Producer side is `ClientsModule.registerAsync` → inject `ClientProxy`.
+- `@EventPattern` handlers live on a `@Controller` (`controllers: [...]`, not
+  `providers`). Manual ack (`noAck: false`): `ack` on success, `nack(msg, false, false)`
+  (no requeue) on an unrecoverable error — a corrupt image won't fix itself.
+- Queue name from `RABBITMQ_ATTACHMENTS_QUEUE`. Run e2e with the dev server **stopped** —
+  otherwise both processes pull from the shared queue.
+- `sharp` is unit-tested in isolation (`ImageProcessingService`), no queue/DB needed.
+
 ## Docker Compose (DedCinema pattern)
 
 - One `docker-compose.yml` at the repo root; each backing service gets a

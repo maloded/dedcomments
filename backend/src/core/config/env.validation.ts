@@ -55,7 +55,11 @@ export class EnvironmentVariables {
 
 	@IsOptional()
 	@IsString()
-	RABBITMQ_ATTACHMENTS_QUEUE = 'attachments.process';
+	RABBITMQ_ATTACHMENTS_QUEUE = 'attachment.resize';
+
+	@IsOptional()
+	@IsString()
+	UPLOADS_DIR = 'uploads';
 
 	@IsString()
 	@IsNotEmpty()
