@@ -11,7 +11,7 @@ import type { Author } from '@prisma/client';
 @ObjectType()
 export class AuthorModel implements Pick<
 	Author,
-	'id' | 'username' | 'email' | 'homepage' | 'createdAt'
+	'id' | 'username' | 'email' | 'homepage' | 'isBanned' | 'createdAt'
 > {
 	@Field(() => ID)
 	public id: string;
@@ -24,6 +24,12 @@ export class AuthorModel implements Pick<
 
 	@Field(() => String, { nullable: true })
 	public homepage: string | null;
+
+	@Field(() => Boolean, {
+		description:
+			'True if a moderator has banned this identity from commenting.',
+	})
+	public isBanned: boolean;
 
 	@Field(() => Date)
 	public createdAt: Date;

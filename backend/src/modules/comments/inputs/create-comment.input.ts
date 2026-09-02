@@ -9,7 +9,11 @@ import {
 	Matches,
 	MaxLength,
 } from 'class-validator';
-import { CAPTCHA_REGEX, USERNAME_REGEX } from '../../../shared/constants';
+import {
+	CAPTCHA_REGEX,
+	COMMENT_TEXT_MAX_LENGTH,
+	USERNAME_REGEX,
+} from '../../../shared/constants';
 
 @InputType()
 export class CreateCommentInput {
@@ -45,7 +49,7 @@ export class CreateCommentInput {
 	})
 	@IsString()
 	@IsNotEmpty({ message: 'Comment text is required.' })
-	@MaxLength(20000)
+	@MaxLength(COMMENT_TEXT_MAX_LENGTH)
 	public text: string;
 
 	@Field(() => String, {

@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+	ForbiddenException,
+	Injectable,
+	NotFoundException,
+} from '@nestjs/common';
 import type { Author } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
 
@@ -17,15 +21,44 @@ export class AuthorsService {
 	 * Uses the `@@unique([username, email])` constraint so concurrent first
 	 * comments from the same person don't create duplicates. A newly supplied
 	 * homepage overwrites the stored one.
+	 *
+	 * A **banned** identity is rejected here — this is the choke point every
+	 * `createComment` goes through.
 	 */
 	public async findOrCreate(identity: AuthorIdentity): Promise<Author> {
 		const { username, email } = identity;
 		const homepage = identity.homepage?.trim() || null;
 
+		const existing = await this.prismaService.author.findUnique({
+			where: { username_email: { username, email } },
+			select: { isBanned: true },
+		});
+		if (existing?.isBanned) {
+			throw new ForbiddenException(
+				'This author (username + e-mail) has been banned from commenting.',
+			);
+		}
+
 		return this.prismaService.author.upsert({
 			where: { username_email: { username, email } },
 			create: { username, email, homepage },
 			update: homepage ? { homepage } : {},
+		});
+	}
+
+	/** Ban an author identity (moderator only). Their existing comments stay. */
+	public async ban(authorId: string): Promise<Author> {
+		const author = await this.prismaService.author.findUnique({
+			where: { id: authorId },
+			select: { id: true },
+		});
+		if (!author) {
+			throw new NotFoundException(`Author "${authorId}" was not found.`);
+		}
+
+		return this.prismaService.author.update({
+			where: { id: authorId },
+			data: { isBanned: true },
 		});
 	}
 }

@@ -10,6 +10,7 @@ import { CacheService } from '../cache/cache.service';
 import { AttachmentType } from '../attachments/enums/attachment-type.enum';
 import { AuthorsService } from '../authors/authors.service';
 import { CaptchaService } from '../captcha/captcha.service';
+import { CommentsGateway } from '../gateway/comments.gateway';
 import { SanitizerService } from '../sanitizer/sanitizer.service';
 import {
 	ROOT_COMMENTS_CACHE_PREFIX,
@@ -40,6 +41,7 @@ interface ThreadRow {
 	authorUsername: string;
 	authorEmail: string;
 	authorHomepage: string | null;
+	authorIsBanned: boolean;
 	authorCreatedAt: Date;
 	attachmentId: string | null;
 	attachmentType: string | null;
@@ -57,6 +59,7 @@ export class CommentsService {
 		private readonly authorsService: AuthorsService,
 		private readonly captchaService: CaptchaService,
 		private readonly sanitizerService: SanitizerService,
+		private readonly commentsGateway: CommentsGateway,
 	) {}
 
 	// ─── Reads ──────────────────────────────────────────────────────────────
@@ -130,25 +133,32 @@ export class CommentsService {
 	 * `rootId` is passed to Postgres as a bound parameter (never concatenated),
 	 * so SQL metacharacters in it are harmless — an unknown / malformed id just
 	 * yields an empty result and a clean 404.
+	 *
+	 * Hidden comments (moderation) are excluded at every level — hiding a comment
+	 * hides its whole subtree from public view.
 	 */
 	public async getCommentThread(rootId: string): Promise<ThreadCommentModel> {
-		// The anchor requires `parentId IS NULL`, so asking for a thread by a
-		// reply's id returns nothing → same 404 as an unknown id.
+		// The anchor requires `parentId IS NULL` and `isHidden = false`, so asking
+		// for a thread by a reply's id — or a hidden root — returns nothing → the
+		// same 404 as an unknown id.
 		const rows = await this.prismaService.$queryRaw<ThreadRow[]>`
 			WITH RECURSIVE thread AS (
 				SELECT
 					c."id", c."text", c."parentId", c."authorId",
-					c."createdAt", c."isHidden", 0 AS depth
+					c."createdAt", 0 AS depth
 				FROM "comments" c
-				WHERE c."id" = ${rootId} AND c."parentId" IS NULL
+				WHERE c."id" = ${rootId}
+					AND c."parentId" IS NULL
+					AND c."isHidden" = false
 
 				UNION ALL
 
 				SELECT
 					child."id", child."text", child."parentId", child."authorId",
-					child."createdAt", child."isHidden", parent.depth + 1
+					child."createdAt", parent.depth + 1
 				FROM "comments" child
 				INNER JOIN thread parent ON child."parentId" = parent."id"
+				WHERE child."isHidden" = false
 			)
 			SELECT
 				t."id", t."text", t."parentId", t."createdAt", t.depth,
@@ -156,6 +166,7 @@ export class CommentsService {
 				a."username"    AS "authorUsername",
 				a."email"       AS "authorEmail",
 				a."homepage"    AS "authorHomepage",
+				a."isBanned"    AS "authorIsBanned",
 				a."createdAt"   AS "authorCreatedAt",
 				att."id"           AS "attachmentId",
 				att."type"::text   AS "attachmentType",
@@ -172,7 +183,7 @@ export class CommentsService {
 		if (rows.length === 0) {
 			throw new NotFoundException(
 				`Comment thread "${rootId}" was not found. A thread can only be ` +
-					`requested by the id of a top-level comment.`,
+					`requested by the id of a visible top-level comment.`,
 			);
 		}
 
@@ -249,7 +260,40 @@ export class CommentsService {
 		// move: drop the whole cached list.
 		await this.cacheService.delByPattern(`${ROOT_COMMENTS_CACHE_PREFIX}*`);
 
-		return CommentsService.toModel(comment);
+		const model = CommentsService.toModel(comment);
+		this.commentsGateway.emitCommentCreated(model);
+		return model;
+	}
+
+	// ─── Moderation ─────────────────────────────────────────────────────────
+
+	/**
+	 * Hide a comment (moderator only). It stays in the DB (tree integrity) but
+	 * disappears from every public query — `rootComments`, `commentThread`, reply
+	 * counts.
+	 */
+	public async hideComment(commentId: string): Promise<CommentModel> {
+		const exists = await this.prismaService.comment.findUnique({
+			where: { id: commentId },
+			select: { id: true },
+		});
+		if (!exists) {
+			throw new NotFoundException(
+				`Comment "${commentId}" was not found.`,
+			);
+		}
+
+		const updated = await this.prismaService.comment.update({
+			where: { id: commentId },
+			data: { isHidden: true },
+			include: {
+				author: true,
+				_count: { select: { replies: { where: { isHidden: false } } } },
+			},
+		});
+
+		await this.cacheService.delByPattern(`${ROOT_COMMENTS_CACHE_PREFIX}*`);
+		return CommentsService.toModel(updated);
 	}
 
 	// ─── Helpers ────────────────────────────────────────────────────────────
@@ -339,6 +383,7 @@ export class CommentsService {
 					username: row.authorUsername,
 					email: row.authorEmail,
 					homepage: row.authorHomepage,
+					isBanned: row.authorIsBanned,
 					createdAt: row.authorCreatedAt,
 				},
 				attachment: row.attachmentId

@@ -279,8 +279,20 @@ model Moderator {
   synchronously, `processedAt` set immediately. Files are served read-only at
   `/uploads/*`. Returns `AttachmentModel { id, type, url, originalName, size, processedAt }`;
   its `id` goes into `createComment(attachmentId:)`.
-- Moderator mutations (`hideComment`, `banAuthor`) — behind a JWT guard, after the core
-  endpoints MVP
+- `moderatorLogin(input: ModeratorLoginInput!): AuthPayload!` — **implemented**.
+  `{ username, password }` → `{ accessToken (JWT), moderator }`. bcrypt-checked against the
+  `Moderator` table; same error for bad user / bad password. Rate-limited 5/min. Seed an
+  account with `npm run seed:moderator`.
+- `hideComment(commentId: ID!): CommentModel!` — **implemented**. Moderator only
+  (`Authorization: Bearer <jwt>`). Sets `isHidden = true`; the comment (and, in a thread,
+  its whole subtree) then vanishes from `rootComments` and `commentThread`.
+- `banAuthor(authorId: ID!): AuthorModel!` — **implemented**. Moderator only. Sets
+  `Author.isBanned = true`; that `(username, email)` identity's future `createComment`
+  calls are rejected with `FORBIDDEN` (checked in `AuthorsService.findOrCreate`). Existing
+  comments stay.
+- **WebSocket** (`modules/gateway`, Socket.IO at `/socket.io/`) — `createComment`
+  broadcasts a `commentCreated` event carrying the new `CommentModel` (id, text, author,
+  parentId, createdAt, …) to every connected client. No auth, one room.
 
 **Explicit decision:** do NOT start the frontend until the core endpoints (`rootComments`,
 `commentThread`, `createComment`, `captchaChallenge`) are implemented and tested via
@@ -576,3 +588,69 @@ preserved); upload → queue → `processedAt` stamped → `createComment` links
   filtering consistently.
 - WebSocket `commentCreated` event (`modules/gateway`).
 - Deployment + XSS/SQLi security pass + README.
+
+---
+
+### Step 5 — WebSocket gateway, JWT/Moderator auth, rate limiting, security pass (done)
+
+**This is the last backend step. The backend is now feature-complete for the
+Middle-level scope** — every required tool (NestJS, Prisma, GraphQL, Redis, RabbitMQ,
+JWT, WebSocket, Docker) is in place and exercised. Next up is the **frontend**.
+
+**WebSocket** (`modules/gateway`)
+- Socket.IO gateway (`@nestjs/platform-socket.io`) on the app's HTTP port, `/socket.io/`.
+  `CommentsGateway.emitCommentCreated(comment)` broadcasts `commentCreated` (the full
+  `CommentModel`) to all clients; called by `CommentsService.createComment`. No auth,
+  one room, `cors: { origin: true }` (only public data, no credentials).
+
+**JWT / Moderator** (`modules/auth` + `core/guards`)
+- `moderatorLogin` → JWT (`@nestjs/jwt`, global `JwtModule`; bcrypt via `bcryptjs`).
+- `JwtAuthGuard` (`core/guards/jwt-auth.guard.ts`, provided by `AuthModule`) — verifies
+  the bearer token, loads the `Moderator`, sets `req.user`. Applied per-resolver with
+  `@UseGuards`, never globally.
+- `hideComment` (comments), `banAuthor` (authors) — both `@UseGuards(JwtAuthGuard)`.
+- `Author.isBanned` added (migration `20260902160159_author_is_banned`).
+  `AuthorsService.findOrCreate` rejects a banned identity (`FORBIDDEN`) before any write.
+- Seed: `npm run seed:moderator` (`prisma/seed-moderator.ts`) — dev creds
+  `moderator` / `moderator-dev-password` in `.env.example`.
+
+**`isHidden` enforced everywhere**
+- `commentThread` CTE now filters `isHidden = false` at every level (Step 3 deferred
+  this). Hiding a comment hides its subtree. `rootComments` + `_count` already filtered.
+  No moderator-can-see-hidden path — deliberately simple.
+
+**Rate limiting** (`@nestjs/throttler`)
+- Global `GqlThrottlerGuard` (`APP_GUARD`). Limits: global 120/min, `createComment`
+  10/min, `moderatorLogin` 5/min (keyed by IP, in-memory). e2e disables it via
+  `THROTTLE_DISABLED`; `security.e2e-spec.ts` re-enables it for its own block.
+
+**Security review findings/fixes**
+- CTE parameterization re-confirmed via 4 injection payloads → clean `NOT_FOUND`.
+- Sanitizer confirmed against `<ScRiPt>`, `data:`/`JavaScript:` hrefs, `on*` attrs;
+  entity-encoded payloads stored inert. Added `COMMENT_TEXT_MAX_LENGTH` (20 000) constant.
+- Body-parser limit **reduced** 12 MB → **8 MB** (`MAX_UPLOAD_BYTES` 8 → 5 MB) to shrink
+  the large-body attack surface; `createComment.text` is separately capped + rate-limited.
+- CORS: `ALLOWED_ORIGIN` pins to the frontend; documented that it must be set in prod.
+- Stack traces already off in error responses (Step 3).
+
+**Deviations (with reasons)**
+- `bcryptjs` (pure-JS) not native `bcrypt` — one less native build in the Alpine image;
+  same API.
+- Moderation mutations live on the **feature** resolvers (`hideComment` in comments,
+  `banAuthor` in authors), not a separate `ModerationResolver` — avoids an
+  `auth ↔ comments/authors` import cycle.
+- `hideComment`/`banAuthor` return the updated entity (not a `Boolean`) so a client can
+  reflect the new state without a refetch.
+- e2e `test:e2e` now runs with `--forceExit` (throttler's in-memory store keeps a timer).
+- `tsconfig.build.json` also excludes `prisma/**` (the new seed script was lifting
+  tsc's rootDir and pushing the build output to `dist/src/`).
+
+**Verified**: build / lint / **78 unit** / **50 e2e** green. Manual: `moderatorLogin`
+→ token; `hideComment` without token → `UNAUTHORIZED`, with token → hidden + gone from
+both queries; `banAuthor` → banned identity blocked (`FORBIDDEN`), other identities fine;
+a live socket client receives `commentCreated` on `createComment`; rapid `createComment`
+→ `THROTTLER` after 10.
+
+**Pending — frontend** (separate session): form + live preview + tag toolbar + CAPTCHA,
+root table (sort/paginate), recursive tree with "Expand", lightbox attachments,
+`commentCreated` socket subscription, moderator login + hide/ban UI.

@@ -5,6 +5,7 @@ import { CacheService } from '../cache/cache.service';
 import { AuthorsService } from '../authors/authors.service';
 import { CaptchaService } from '../captcha/captcha.service';
 import { SanitizerService } from '../sanitizer/sanitizer.service';
+import { CommentsGateway } from '../gateway/comments.gateway';
 import { SortOrder } from '../../shared/enums/sort-order.enum';
 import { RootCommentSortField } from './enums/root-comment-sort-field.enum';
 import {
@@ -51,6 +52,7 @@ describe('CommentsService', () => {
 			findMany: jest.Mock;
 			count: jest.Mock;
 			create: jest.Mock;
+			update: jest.Mock;
 		};
 		attachment: { findUnique: jest.Mock; update: jest.Mock };
 		$transaction: jest.Mock;
@@ -65,6 +67,7 @@ describe('CommentsService', () => {
 	let authors: { findOrCreate: jest.Mock };
 	let captcha: { verify: jest.Mock };
 	let sanitizer: { sanitize: jest.Mock };
+	let gateway: { emitCommentCreated: jest.Mock };
 	let service: CommentsService;
 
 	beforeEach(() => {
@@ -74,6 +77,7 @@ describe('CommentsService', () => {
 				findMany: jest.fn(),
 				count: jest.fn(),
 				create: jest.fn(),
+				update: jest.fn(),
 			},
 			attachment: { findUnique: jest.fn(), update: jest.fn() },
 			$transaction: jest.fn((arg: unknown[] | TxCallback) =>
@@ -91,6 +95,7 @@ describe('CommentsService', () => {
 		};
 		captcha = { verify: jest.fn().mockResolvedValue(true) };
 		sanitizer = { sanitize: jest.fn((t: string) => t) };
+		gateway = { emitCommentCreated: jest.fn() };
 
 		prisma.comment.create.mockResolvedValue({
 			...rootRow({ id: 'comment-1', _count: { replies: 0 } }),
@@ -102,6 +107,7 @@ describe('CommentsService', () => {
 			authors as unknown as AuthorsService,
 			captcha as unknown as CaptchaService,
 			sanitizer as unknown as SanitizerService,
+			gateway as unknown as CommentsGateway,
 		);
 	});
 
@@ -128,6 +134,11 @@ describe('CommentsService', () => {
 			expect(result.repliesCount).toBe(0);
 		});
 
+		it('broadcasts the new comment over the gateway', async () => {
+			const result = await service.createComment(baseInput());
+			expect(gateway.emitCommentCreated).toHaveBeenCalledWith(result);
+		});
+
 		it('fails fast on a bad CAPTCHA and never touches the DB or cache', async () => {
 			captcha.verify.mockResolvedValue(false);
 
@@ -138,6 +149,7 @@ describe('CommentsService', () => {
 			expect(authors.findOrCreate).not.toHaveBeenCalled();
 			expect(prisma.comment.create).not.toHaveBeenCalled();
 			expect(cache.delByPattern).not.toHaveBeenCalled();
+			expect(gateway.emitCommentCreated).not.toHaveBeenCalled();
 		});
 
 		it('rejects a reply to a non-existent parent', async () => {
@@ -176,6 +188,37 @@ describe('CommentsService', () => {
 				'bad markup',
 			);
 			expect(prisma.comment.create).not.toHaveBeenCalled();
+		});
+	});
+
+	// ─── hideComment ────────────────────────────────────────────────────────
+
+	describe('hideComment', () => {
+		it('sets isHidden, busts the cache, returns the model', async () => {
+			prisma.comment.findUnique.mockResolvedValue({ id: 'c1' });
+			prisma.comment.update.mockResolvedValue(
+				rootRow({ id: 'c1', isHidden: true, _count: { replies: 0 } }),
+			);
+
+			const result = await service.hideComment('c1');
+
+			const [updateArg] = prisma.comment.update.mock.calls.at(0) as [
+				{ where: { id: string }; data: { isHidden: boolean } },
+			];
+			expect(updateArg.where.id).toBe('c1');
+			expect(updateArg.data.isHidden).toBe(true);
+			expect(cache.delByPattern).toHaveBeenCalledWith(
+				`${ROOT_COMMENTS_CACHE_PREFIX}*`,
+			);
+			expect(result.id).toBe('c1');
+		});
+
+		it('404s for an unknown comment id', async () => {
+			prisma.comment.findUnique.mockResolvedValue(null);
+			await expect(service.hideComment('nope')).rejects.toBeInstanceOf(
+				NotFoundException,
+			);
+			expect(prisma.comment.update).not.toHaveBeenCalled();
 		});
 	});
 
@@ -339,6 +382,7 @@ describe('CommentsService', () => {
 			authorUsername: `user-${id}`,
 			authorEmail: `${id}@e.com`,
 			authorHomepage: null,
+			authorIsBanned: false,
 			authorCreatedAt: new Date(createdAt),
 			attachmentId: null,
 			attachmentType: null,

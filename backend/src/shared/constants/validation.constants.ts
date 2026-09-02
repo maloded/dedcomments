@@ -10,6 +10,12 @@ export const USERNAME_REGEX = /^[a-zA-Z0-9]+$/;
 /** Brief §4/§CAPTCHA: digits and Latin letters. */
 export const CAPTCHA_REGEX = /^[a-zA-Z0-9]+$/;
 
+/**
+ * Max length of a comment body (raw input, before sanitising). The brief sets no
+ * limit; this is a DoS guard — 20 000 chars is a very long comment.
+ */
+export const COMMENT_TEXT_MAX_LENGTH = 20_000;
+
 /** Brief §5: the ONLY HTML tags allowed in comment text. */
 export const ALLOWED_HTML_TAGS = ['a', 'code', 'i', 'strong'] as const;
 
@@ -48,7 +54,13 @@ export const ALLOWED_TEXT_EXTENSIONS = ['.txt'] as const;
  * The HTTP JSON body limit (main.ts) is set a bit above this to leave room for
  * base64 (~+33%) + the GraphQL envelope.
  */
-export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
-/** Express JSON body-parser limit — must comfortably exceed a base64'd MAX_UPLOAD_BYTES. */
-export const HTTP_BODY_LIMIT = '12mb';
+/**
+ * Express JSON body-parser limit. Sized to comfortably hold a base64'd
+ * `MAX_UPLOAD_BYTES` (~+33%) plus the GraphQL envelope, and no more — it applies
+ * to every mutation, so keeping it as small as the upload path allows limits the
+ * blast radius of a large-body flood. Non-upload fields (`createComment.text`)
+ * are separately capped by `COMMENT_TEXT_MAX_LENGTH` + rate limiting.
+ */
+export const HTTP_BODY_LIMIT = '8mb';

@@ -21,6 +21,9 @@ model Author {
   email    String
   homepage String?
 
+  // Set by a moderator (banAuthor). A banned identity cannot post new comments.
+  isBanned Boolean @default(false)
+
   comments Comment[]
 
   createdAt DateTime @default(now())

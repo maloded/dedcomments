@@ -19,11 +19,20 @@ enum AttachmentType {
   TEXT
 }
 
+type AuthPayload {
+  """JWT — send as `Authorization: Bearer <token>` on guarded mutations."""
+  accessToken: String!
+  moderator: ModeratorModel!
+}
+
 type AuthorModel {
   createdAt: DateTime!
   email: String!
   homepage: String
   id: ID!
+
+  """True if a moderator has banned this identity from commenting."""
+  isBanned: Boolean!
   username: String!
 }
 
@@ -80,11 +89,35 @@ A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date
 """
 scalar DateTime
 
+input ModeratorLoginInput {
+  password: String!
+  username: String!
+}
+
+type ModeratorModel {
+  createdAt: DateTime!
+  id: ID!
+  username: String!
+}
+
 type Mutation {
   """
-  Post a comment (or a reply, via `parentId`). Requires a solved CAPTCHA. Returns the created comment.
+  Moderator only. Ban an author identity (username + e-mail) — their existing comments stay, but they can post no new ones. Requires `Authorization: Bearer <jwt>`.
+  """
+  banAuthor(authorId: ID!): AuthorModel!
+
+  """
+  Post a comment (or a reply, via `parentId`). Requires a solved CAPTCHA. Rate-limited. Also broadcasts a `commentCreated` socket event.
   """
   createComment(input: CreateCommentInput!): CommentModel!
+
+  """
+  Moderator only. Hide a comment — it disappears from `rootComments` and `commentThread`. Requires `Authorization: Bearer <jwt>`.
+  """
+  hideComment(commentId: ID!): CommentModel!
+
+  """Exchange moderator username + password for a JWT. Rate-limited."""
+  moderatorLogin(input: ModeratorLoginInput!): AuthPayload!
 
   """
   Upload one image (JPG/GIF/PNG) or text file (.txt ≤ 100 KB). Images are resized to fit 320×240 on a background queue; check `processedAt`. Pass the returned `id` to `createComment(attachmentId:)` to attach it.
@@ -99,12 +132,12 @@ type Query {
   captchaChallenge: CaptchaChallengeModel!
 
   """
-  The full reply tree for one top-level comment, in a single request. Replies are newest-first at every level.
+  The full reply tree for one top-level comment, in a single request. Replies are newest-first at every level. Hidden comments (and their subtrees) are excluded.
   """
   commentThread(rootId: ID!): ThreadCommentModel!
 
   """
-  Paginated list of top-level comments (25/page) with per-item reply counts. Default order: newest first (LIFO).
+  Paginated list of top-level comments (25/page) with per-item reply counts. Default order: newest first (LIFO). Hidden comments excluded.
   """
   rootComments(
     """1-based page number."""

@@ -138,16 +138,63 @@ Rules:
   (`@IsString()`, `@IsEmail()`, `@IsOptional()`, `@IsUrl()`, `@Matches()`) on every field.
 - Validation runs through a global `ValidationPipe({ transform: true })` in `main.ts`.
 
-## Auth (for the JWT / Moderator step)
+## Auth — JWT / Moderator (implemented)
 
-DedStream pattern, to adapt:
-- Guard in `core/guards/gql-auth.guard.ts` implementing `CanActivate`, pulls the request
-  out of `GqlExecutionContext.create(context).getContext().req`.
-- `@Authorization()` decorator = `applyDecorators(UseGuards(GqlAuthGuard))`.
-- `@CurrentUser()` param decorator (`core/decorators/current-user.decorator.ts`) injects
-  the principal (`req.user`) into a resolver arg.
-- (DedStream uses Redis-backed sessions; this project uses **JWT** per the brief, so the
-  guard verifies a bearer token instead of reading `req.session`.)
+- **`modules/auth`** owns login + the JWT machinery. `JwtModule.registerAsync({ global:
+  true, … })` so `JwtService` is injectable anywhere; `AuthService.moderatorLogin`
+  (bcrypt via `bcryptjs`) issues a token `{ sub, username, role: 'MODERATOR' }`;
+  `AuthService.verifyModerator(token)` is the verification used by the guard.
+- **`core/guards/jwt-auth.guard.ts`** — `CanActivate` that reads `Authorization: Bearer
+  <jwt>` from the Gql context, calls `AuthService.verifyModerator`, and puts the
+  `Moderator` on `req.user`. **Provided + exported by `AuthModule`** (the file lives in
+  `core/` per convention, the provider registration lives with `JwtModule`).
+- Applied **per resolver**, never globally: `@UseGuards(JwtAuthGuard)` on `hideComment`
+  (comments) and `banAuthor` (authors). Those feature modules `imports: [AuthModule]`.
+- `@CurrentUser()` (`core/decorators/`) reads `req.user` — available on guarded resolvers.
+- Same "Invalid username or password" for a wrong user and a wrong password (no account
+  enumeration).
+- **Moderator seed**: `npm run seed:moderator` (`prisma/seed-moderator.ts`, `ts-node`)
+  upserts one account from `MODERATOR_USERNAME` / `MODERATOR_PASSWORD` in `backend/.env`.
+  Dev defaults (in `.env.example`): **`moderator` / `moderator-dev-password`** — change
+  before any real deploy. The script needs dev deps, so for a deployed DB run it from a
+  local checkout pointed at the prod `DATABASE_URL`.
+- **Ban enforcement**: `AuthorsService.findOrCreate` (the choke point every
+  `createComment` passes through) rejects a banned `(username, email)` identity with
+  `ForbiddenException` before any write.
+
+## WebSocket gateway (`modules/gateway`)
+
+- Socket.IO (`@nestjs/platform-socket.io`), auto-attached to the app's HTTP port at
+  `/socket.io/`. No auth on the connection, one broadcast room — anonymous viewers just
+  want the live feed.
+- `CommentsGateway.emitCommentCreated(comment: CommentModel)` → `server.emit(
+  'commentCreated', comment)`. Called by `CommentsService.createComment` after the row is
+  committed and the cache busted. `CommentsModule imports [GatewayModule]`.
+- CORS on the socket is open (`cors: { origin: true }`) — it only ever broadcasts data
+  that is already public via GraphQL and carries no credentials.
+
+## Rate limiting (`@nestjs/throttler`)
+
+- `GqlThrottlerGuard` (`core/guards/`, extends `ThrottlerGuard`, overrides
+  `getRequestResponse` for the Gql context) is registered as a global `APP_GUARD` in
+  `CoreModule`.
+- Limits (`shared/constants/rate-limit.constants.ts`, `ttl` in ms, keyed by client IP,
+  in-memory store):
+  - global: **120 / 60 s**
+  - `createComment`: **10 / 60 s** (`@Throttle`)
+  - `moderatorLogin`: **5 / 60 s** (`@Throttle`) — blunt brute-forcing
+- e2e turns it off via `process.env.THROTTLE_DISABLED` (set in `setup-e2e.ts`) —
+  `ThrottlerModule`'s `skipIf`. The limits themselves are covered by the
+  `security.e2e-spec.ts` "rate limiting" block (which re-enables it) + unit tests.
+- In-memory store ⇒ per-instance. Multi-instance would need the Redis storage adapter.
+  Behind a proxy, set `trust proxy` so `req.ip` is the real client.
+
+## CORS
+
+- `main.ts`: `origin: ALLOWED_ORIGIN ?? true`. `ALLOWED_ORIGIN` (env) pins it to the
+  frontend origin (`http://localhost:3000` in dev); unset falls back to reflecting the
+  request origin — a dev convenience. **Set `ALLOWED_ORIGIN` in production.** Auth is a
+  bearer header, not a cookie, so `credentials: true` is belt-and-braces.
 
 ## GraphQL config (`core/config/graphql.config.ts`)
 
@@ -188,6 +235,11 @@ The comment-body sanitizer is the primary XSS defence. Design decisions:
   normalised toward valid XHTML by `sanitize-html`. That is escaping, not structural
   auto-fixing, and the stored value renders identically.
 - `SanitizerModule` is `@Global` (comments now, live-preview resolver later).
+- **Security review (Step 5) — confirmed rejected**: mixed-case `<ScRiPt>` (parser is
+  `lowerCaseTags`), `data:` and `JavaScript:` URIs in `href`, `on*` event-handler
+  attributes. Entity-encoded payloads (`&lt;script&gt;`) are stored as inert text.
+  Comment bodies are capped at `COMMENT_TEXT_MAX_LENGTH` (20 000) by the DTO before the
+  sanitizer runs (DoS guard).
 
 ## Raw SQL / recursive queries
 
@@ -203,6 +255,13 @@ The comment-body sanitizer is the primary XSS defence. Design decisions:
   (a `Map<id, node>` pass), ordering each level newest-first (LIFO).
 - No cycle guard needed: `parentId` is only ever set at creation to an existing comment,
   and comments are immutable — a cycle is unconstructable.
+- The CTE also filters `isHidden = false` at every level — hiding a comment hides its
+  whole subtree from public view. `rootComments` filters `isHidden` too. There is no
+  "but a moderator can see hidden" path — deliberately simple: hidden means hidden.
+- **Security review (Step 5) — re-confirmed**: the only interpolation is `${rootId}` in
+  the tagged `$queryRaw`, bound as `$1`. Verified in `security.e2e-spec.ts` against
+  `1' OR '1'='1`, `'; DROP TABLE …`, `UNION SELECT`, `pg_sleep(5)` — all return a clean
+  `NOT_FOUND`, tables intact.
 
 ## Redis caching
 
