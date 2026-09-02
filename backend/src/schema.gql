@@ -2,6 +2,79 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+type AuthorModel {
+  createdAt: DateTime!
+  email: String!
+  homepage: String
+  id: ID!
+  username: String!
+}
+
+type CaptchaChallengeModel {
+  """After this instant the challenge can no longer be solved."""
+  expiresAt: DateTime!
+
+  """SVG image as a `data:image/svg+xml;base64,…` URL."""
+  image: String!
+
+  """Opaque one-time token; pass it back as `captchaToken`."""
+  token: String!
+}
+
+type CommentModel {
+  author: AuthorModel!
+  createdAt: DateTime!
+  id: ID!
+
+  """null for a top-level comment, otherwise the parent id."""
+  parentId: ID
+
+  """
+  Number of direct replies. (The root-list query will populate the full subtree count; on a freshly created comment this is 0.)
+  """
+  repliesCount: Int!
+  text: String!
+}
+
+input CreateCommentInput {
+  """Id of a previously uploaded, not-yet-linked attachment."""
+  attachmentId: String
+
+  """The text read from the CAPTCHA image."""
+  captchaAnswer: String!
+
+  """Token from `captchaChallenge`."""
+  captchaToken: String!
+  email: String!
+
+  """Optional author home page (absolute URL)."""
+  homepage: String
+
+  """Id of the comment being replied to; omit for a root comment."""
+  parentId: String
+
+  """
+  Comment body. Allowed HTML: <a href title>, <code>, <i>, <strong> — must be well-formed XHTML.
+  """
+  text: String!
+  username: String!
+}
+
+"""
+A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
+"""
+scalar DateTime
+
+type Mutation {
+  """
+  Post a comment (or a reply, via `parentId`). Requires a solved CAPTCHA. Returns the created comment.
+  """
+  createComment(input: CreateCommentInput!): CommentModel!
+}
+
 type Query {
-  health: String!
+  """
+  Generate a fresh CAPTCHA (token + SVG image). Solve it and pass `token` + answer to `createComment`.
+  """
+  captchaChallenge: CaptchaChallengeModel!
 }

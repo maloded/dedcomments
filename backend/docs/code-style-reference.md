@@ -166,6 +166,29 @@ DedStream pattern, to adapt:
   `extensions.code` (`NOT_FOUND`, `BAD_REQUEST`, `INTERNAL_SERVER_ERROR`, …). Unknown
   errors are logged server-side and returned as a generic "Internal server error".
 
+## Sanitizer (`modules/sanitizer`)
+
+The comment-body sanitizer is the primary XSS defence. Design decisions:
+
+- **Reject, don't strip.** Disallowed tags/attributes and malformed markup throw
+  `BadRequestException` with a human message — the author finds out their markup was
+  wrong instead of silently losing content. (Silent stripping hides mistakes and is
+  easier to probe for bypasses.)
+- **Reject, don't auto-fix.** Unclosed tags, mis-nested tags and stray end tags are
+  rejected; the sanitizer never closes tags on the author's behalf. "Valid XHTML" per
+  the brief.
+- Allowed: `<a href title>`, `<code>`, `<i>`, `<strong>` — from `shared/constants`
+  (`ALLOWED_HTML_TAGS` / `ALLOWED_HTML_ATTRIBUTES`). `<a href>` must be a safe scheme
+  (`http`/`https`/`mailto`), empty, or a fragment/relative link.
+- Implementation: an `htmlparser2` pass (`xmlMode`) enforces the whitelist + tag balance
+  (every open needs an **explicit** matching close — implied closes are treated as
+  "not properly closed"); a source-vs-parsed `</tag>` count catches orphan end tags.
+  Then `sanitize-html` runs as a final normalisation/defence-in-depth pass.
+- **Accepted normalisation:** text-level entities (`&` → `&amp;`, bare `<` → `&lt;`) are
+  normalised toward valid XHTML by `sanitize-html`. That is escaping, not structural
+  auto-fixing, and the stored value renders identically.
+- `SanitizerModule` is `@Global` (comments now, live-preview resolver later).
+
 ## Docker Compose (DedCinema pattern)
 
 - One `docker-compose.yml` at the repo root; each backing service gets a
@@ -185,4 +208,12 @@ DedStream pattern, to adapt:
   engine is the lower-risk choice for a "clone and run" reviewer. Can be upgraded later
   without touching call sites.
 - **JWT** auth instead of Redis session cookies (brief requirement).
-- Redis is used as a read cache for the comments list, not for sessions.
+- Redis (via `ioredis`, `modules/cache`) holds one-time CAPTCHA answers now and will
+  cache the comments list later. DedStream used the `redis` v4 client; `ioredis` chosen
+  here for its simpler connection lifecycle.
+- **Exact-pinned** `sanitize-html@2.16.0` + `htmlparser2@8.0.2` (not `^`): 2.17 pulls
+  `htmlparser2@12` which is ESM-only and breaks the CJS Jest runner. Same reason
+  `@nestjs/config` is pinned to 4.
+- CAPTCHA answers live only in **Redis** (keyed by token, TTL from
+  `CAPTCHA_TTL_SECONDS`), not in the `CaptchaChallenge` Prisma model — that table is
+  currently unused and may be dropped or repurposed for audit/rate-limiting later.

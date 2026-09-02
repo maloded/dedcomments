@@ -1,36 +1,35 @@
-import { Test, type TestingModule } from '@nestjs/testing';
-import { type INestApplication, ValidationPipe } from '@nestjs/common';
+import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { createTestApp } from './create-test-app';
 
-describe('GraphQL API (e2e)', () => {
+interface CaptchaBody {
+	data: {
+		captchaChallenge: { token: string; image: string; expiresAt: string };
+	} | null;
+	errors?: unknown;
+}
+
+describe('GraphQL API (e2e) — schema smoke test', () => {
 	let app: INestApplication<App>;
 
-	beforeEach(async () => {
-		const moduleFixture: TestingModule = await Test.createTestingModule({
-			imports: [AppModule],
-		}).compile();
-
-		app = moduleFixture.createNestApplication();
-		app.useGlobalPipes(new ValidationPipe({ transform: true }));
-		await app.init();
+	beforeAll(async () => {
+		app = await createTestApp();
 	});
 
-	afterEach(async () => {
+	afterAll(async () => {
 		await app?.close();
 	});
 
-	it('answers the placeholder health query', () => {
-		return request(app.getHttpServer())
+	it('serves captchaChallenge', async () => {
+		const res = await request(app.getHttpServer())
 			.post('/graphql')
-			.send({ query: '{ health }' })
-			.expect(200)
-			.expect(res => {
-				const body = res.body as { data?: { health?: string } };
-				if (body.data?.health !== 'ok') {
-					throw new Error(JSON.stringify(res.body));
-				}
-			});
+			.send({ query: '{ captchaChallenge { token image expiresAt } }' })
+			.expect(200);
+
+		const body = res.body as CaptchaBody;
+		const challenge = body.data?.captchaChallenge;
+		expect(challenge?.token).toEqual(expect.any(String));
+		expect(challenge?.image).toMatch(/^data:image\/svg\+xml;base64,/);
 	});
 });

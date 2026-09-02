@@ -25,6 +25,9 @@ model Author {
 
   createdAt DateTime @default(now())
 
+  // One row per (username, email) identity — the same person commenting again
+  // reuses their Author row so the root table can aggregate/sort by author.
+  @@unique([username, email])
   // Root-list sorting/pagination is by Author.username / Author.email (brief §3.2).
   @@index([username])
   @@index([email])
@@ -66,15 +69,20 @@ enum AttachmentType {
 
 /// Optional single attachment on a comment: a (resized) image or a text file.
 model Attachment {
-  id           String         @id @default(uuid())
-  commentId    String         @unique
-  comment      Comment        @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  id String @id @default(uuid())
+
+  // Nullable: an attachment is uploaded on its own first, then linked when the
+  // comment is created (createComment.attachmentId). Still @unique — at most one
+  // attachment per comment.
+  commentId String?  @unique
+  comment   Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
   type         AttachmentType
   url          String
   originalName String
   size         Int
   // Set once the RabbitMQ worker has resized/validated the file.
-  processedAt  DateTime?
+  processedAt DateTime?
 
   createdAt DateTime @default(now())
 

@@ -1,14 +1,21 @@
-import { Query, Resolver } from '@nestjs/graphql';
+import { Args, Mutation, Resolver } from '@nestjs/graphql';
 import { CommentsService } from './comments.service';
+import { CreateCommentInput } from './inputs/create-comment.input';
+import { CommentModel } from './models/comment.model';
 
-@Resolver()
+@Resolver(() => CommentModel)
 export class CommentsResolver {
 	public constructor(private readonly commentsService: CommentsService) {}
 
-	// Placeholder so the code-first schema has at least one Query while the real
-	// resolvers (rootComments / commentThread / createComment) are built in step 2.
-	@Query(() => String, { name: 'health' })
-	public health(): string {
-		return 'ok';
+	@Mutation(() => CommentModel, {
+		name: 'createComment',
+		description:
+			'Post a comment (or a reply, via `parentId`). Requires a solved ' +
+			'CAPTCHA. Returns the created comment.',
+	})
+	public createComment(
+		@Args('input') input: CreateCommentInput,
+	): Promise<CommentModel> {
+		return this.commentsService.createComment(input);
 	}
 }

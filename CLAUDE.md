@@ -245,9 +245,17 @@ model Moderator {
   comments by username/email/date; returns `repliesCount` without nested data
 - `commentThread(rootId)` — the full reply tree in one request (recursive CTE in Postgres,
   since Prisma doesn't support recursive relations out of the box)
-- `createComment(input)` — validation (username regex `^[a-zA-Z0-9]+$`, email, url,
-  CAPTCHA check, HTML sanitization with tag whitelist + XHTML validity check)
-- `captchaChallenge` — generates a CAPTCHA token and image
+- `createComment(input: CreateCommentInput!): CommentModel!` — **implemented**.
+  `CreateCommentInput { username, email, homepage?, text, parentId?, captchaToken,
+  captchaAnswer, attachmentId? }`. Flow: verify CAPTCHA (one-time) → field validation
+  (username regex `^[a-zA-Z0-9]+$`, `@IsEmail`, `@IsUrl`) → sanitize/validate body
+  (tag whitelist + explicit-close XHTML check, **rejects** rather than strips) → parent
+  must exist if `parentId` set → find-or-create `Author` by (username,email) → create
+  `Comment` (links `attachmentId` in the same transaction). Returns `CommentModel
+  { id, text, parentId, author, repliesCount, createdAt }`.
+- `captchaChallenge: CaptchaChallengeModel!` — **implemented**. Returns
+  `{ token, image (SVG data URL), expiresAt }`; the expected answer is stored in Redis
+  under the token with a TTL (`CAPTCHA_TTL_SECONDS`). Verified once, then invalidated.
 - `uploadAttachment` — file upload; image resizing and size validation handled via the
   RabbitMQ queue
 - Moderator mutations (`hideComment`, `banAuthor`) — behind a JWT guard, after the core
@@ -387,12 +395,59 @@ to lightbox2 as a UX reference, not a code source.
 `GET /graphql` → Apollo Sandbox (HTTP 200); `npm run build` / `lint` / `test:e2e` green;
 full Docker image builds and the containerised backend boots + serves `/graphql`.
 
-**Pending — next (step 2): core GraphQL endpoints**
+**Pending — next: read-side queries**
 - `rootComments(page, sortBy, sortOrder)` — 25/page, sort by username/email/date, LIFO
   default, returns `repliesCount` without nested data (Redis-cached).
 - `commentThread(rootId)` — full subtree in one request (recursive CTE).
-- `createComment(input)` — username/email/URL validation, CAPTCHA check, HTML sanitize
-  (whitelist + XHTML well-formedness).
-- `captchaChallenge` — token + image generation.
-- Then wire the real GraphQL models/inputs into the empty module skeletons; add the JWT
-  guard in `core/guards/`; drop the placeholder `health` query.
+- Then attachments (`uploadAttachment` + RabbitMQ resize) and the JWT/Moderator guard.
+
+---
+
+### Step 2 — CAPTCHA, sanitizer, createComment (done)
+
+**Implemented**
+- **`modules/cache`** — real `CacheService` over `ioredis` (`get`/`set`+TTL/`del` + JSON
+  helpers). `@Global`.
+- **`modules/captcha`** — `svg-captcha` generation (`captchaChallenge` query →
+  `{ token, image: SVG data URL, expiresAt }`); answer stored in Redis under the token
+  with `CAPTCHA_TTL_SECONDS` TTL. `CaptchaService.verify(token, answer)` — internal,
+  case-insensitive, one-time (deletes the key on every attempt, success or not).
+- **`modules/sanitizer`** — `SanitizerService.sanitize(text)`: `htmlparser2` whitelist +
+  explicit-close XHTML check, then `sanitize-html`. **Rejects** disallowed tags/attrs,
+  unsafe `href`, and malformed markup with a clear `BadRequestException` (no silent
+  stripping / auto-closing). See docs/code-style-reference.md → "Sanitizer".
+- **`modules/comments`** — `createComment` mutation + `CommentModel` + `CreateCommentInput`
+  (class-validator: username regex, `@IsEmail`, `@IsUrl`, UUIDs). Flow described in
+  "Core GraphQL endpoints" above. Placeholder `health` query removed.
+- **`modules/authors`** — `AuthorsService.findOrCreate({username,email,homepage})` via
+  `upsert` on the new `@@unique([username, email])`.
+- Migration `..._author_identity_unique_and_nullable_attachment`: `Author` gets
+  `@@unique([username,email])`; `Attachment.commentId` becomes **nullable** (upload
+  first, link on `createComment`).
+- Tests: 30 unit (`sanitizer` 15, `captcha` 6, `comments.service` 5, + config 4) and
+  9 e2e (`createComment` happy paths + reply + bad field / bad CAPTCHA / XSS / bad
+  username / ghost parent / token-replay). e2e reads the CAPTCHA answer from Redis.
+
+**Deviations from the plan (with reasons)**
+- CAPTCHA answers stored in **Redis only**, not the `CaptchaChallenge` Prisma model
+  (step brief said Redis). That model is now unused — keep for later audit/rate-limit or
+  drop.
+- `Attachment.commentId` made nullable + `Author` unique constraint added — needed for
+  the "upload separately, link on create" flow and duplicate-free author aggregation.
+- Exact-pinned `sanitize-html@2.16.0` + `htmlparser2@8.0.2`: 2.17 → `htmlparser2@12`
+  (ESM-only) breaks the CJS Jest runner.
+- Sanitizer **rejects** bad markup instead of stripping (documented choice — better UX +
+  security). Bare `&` / `<` in text are escaped to valid XHTML (`&amp;`), which is
+  normalisation, not structural auto-fixing.
+- 1 known `npm audit` high (`deepmerge`-family, transitive of `sanitize-html`) — config
+  is a static object, not user-controlled deep merge; acceptable for now.
+
+**Verified**: `npm run build` / `lint` / `test` (30) / `test:e2e` (9) all green.
+Manual GraphQL check: `captchaChallenge` → solve → `createComment` creates the comment;
+wrong CAPTCHA, `<script>`, `<img onerror>`, `javascript:` href, unclosed/mis-nested tags,
+bad username/email, and replies to a missing parent all rejected with clear coded errors.
+
+**Pending — next**
+- `rootComments` (pagination + sort + LIFO + `repliesCount`, Redis-cached) and
+  `commentThread` (recursive CTE).
+- `uploadAttachment` + RabbitMQ image resize; JWT/Moderator guard in `core/guards/`.
