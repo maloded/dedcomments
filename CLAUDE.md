@@ -135,7 +135,7 @@ in Postgres. There is deliberately no `CaptchaChallenge` table.
 **Queue:** RabbitMQ (attachment processing — async image resizing)
 **Auth:** JWT (Moderator role only)
 **Real-time:** WebSocket (NestJS Gateway) — `commentCreated` event for live list updates
-**Frontend:** React + Next.js (App Router), Apollo Client + GraphQL Codegen, plain CSS/Tailwind
+**Frontend:** React + Next.js (App Router), Apollo Client + GraphQL Codegen, SCSS Modules
 **Infra:** Docker, Docker Compose (postgres, redis, rabbitmq, backend, frontend), Nginx
 (optional reverse proxy on deploy), deployed to a VDS or Vercel(front)+VDS(back)/Render
 
