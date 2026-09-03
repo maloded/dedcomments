@@ -312,6 +312,103 @@ GraphQL Playground/Postman.
 
 ---
 
+## Styling approach
+
+SCSS Modules, adapted from a scouting pass over WordWeave's `shared/ui` kit (see
+"Code style references" above) — reusing its conventions where they fit a project this
+size, skipping everything that's there for FSD's sake rather than the styling itself.
+
+### Folder structure
+
+```
+frontend/src/
+├── styles/
+│   ├── tokens.scss      # all design tokens, as CSS custom properties on :root
+│   └── globals.scss     # reset + global element styles; imports tokens.scss
+├── shared/
+│   ├── lib/
+│   │   └── classNames.ts   # the (cls, mods, additional) helper — see below
+│   └── ui/                 # only the primitives this project actually needs:
+│       ├── Button/
+│       │   ├── Button.tsx
+│       │   ├── Button.module.scss
+│       │   └── index.ts
+│       ├── Card/
+│       │   ├── Card.tsx
+│       │   ├── Card.module.scss
+│       │   └── index.ts
+│       └── Skeleton/
+│           ├── Skeleton.tsx
+│           ├── Skeleton.module.scss
+│           └── index.ts
+└── components/              # comment-domain components (CommentCard, CommentForm,
+    └── .../                 # CommentTree, TagToolbar, …), same colocation pattern:
+                              # Component.tsx + Component.module.scss + index.ts
+```
+
+No `shared/ui/index.ts` barrel — each primitive is imported from its own path
+(`from '@/shared/ui/Button'`), matching WordWeave; a kit-wide barrel isn't worth it for
+three components and just risks dragging in unused code.
+
+### What we're reusing from WordWeave, and why
+
+- **CSS custom properties for tokens, not SCSS `$variables`.** `tokens.scss` declares
+  everything as `--token-name` on `:root`, exactly like WordWeave's
+  `variables/global.scss`. This is what actually gets used at the component level
+  (`color: var(--text)`) — SCSS variables would only be a compile-time indirection with
+  no runtime benefit here, and CSS custom properties are what a future theme toggle (if
+  ever added) would hang off anyway.
+- **The `classNames()` helper** — same signature as WordWeave's
+  `shared/lib/classNames/classNames.ts`: `(base: string, mods: Record<string, boolean>,
+  additional?: (string | undefined)[]) => string`. Small, dependency-free, and it's the
+  backbone of every variant-composition component below.
+- **Colocation**: one `Component.tsx` + one `Component.module.scss` + one `index.ts`
+  (`export * from './Component'`) per component, no separate `styles/` tree mirroring the
+  component tree.
+- **Naming conventions**: PascalCase for the root/block class (`.Button`, `.Card`,
+  `.CommentCard`), camelCase for boolean modifier classes (`.disabled`, `.fullWidth`),
+  `word_value` for enumerated-value classes (`.gap_0`, `.gap_8`, `.size_s`). Variant
+  props map to classes either directly (`cls[size]` when the prop value already matches
+  the class name) or via an explicit `Record<Variant, string>` lookup when it doesn't —
+  both patterns as seen in `Button`/`Card` vs. `Flex` in WordWeave.
+- **Shallow nesting** — one or two levels of `&` at most (`&:hover`, `&.modifier`), never
+  deep BEM-style `&__element` chains.
+- **The `Skeleton` loading pattern** — a static shimmer-animation module class
+  (`@keyframes` gradient sweep) plus inline `style={{ width, height, borderRadius }}` for
+  the per-instance dimensions CSS Modules can't parameterize. Directly useful here for
+  the attachment-processing polling state (`processedAt: null` while the RabbitMQ
+  consumer resizes an image) and for the root comments table while `rootComments` loads.
+
+### What we're doing BETTER than WordWeave
+
+- **An actual spacing/radius token scale.** WordWeave hardcodes `border-radius` ad hoc
+  per component (8, 12, 16, 18, 20, 32, 34, 40, 48px, 50% — no shared scale at all) and
+  has only two one-off `box-shadow` declarations in the whole codebase. `tokens.scss`
+  defines a real scale instead — `--radius-sm/md/lg/pill`, `--space-1` through
+  `--space-6` (or similar), `--shadow-sm/md` — so every component draws from the same
+  small set of values instead of picking new numbers each time.
+- **Real breakpoints.** WordWeave has *zero* `@media` queries anywhere in its source —
+  it isn't responsive at all. This project needs one: the comment tree's indentation cap
+  drops from ~5-6 levels to 3-4 on mobile (see "Tree rendering on the frontend" above),
+  so `tokens.scss` also defines breakpoint values (e.g. `--breakpoint-mobile: 640px`) used
+  in a small number of deliberate `@media` queries — not a full responsive grid system,
+  just enough for the one place the brief actually calls for it.
+
+### What's deliberately NOT reused
+
+- **FSD layers** (`app/entity/features/pages/shared/widgets`, per-slice
+  `model/{selectors,services,slices,types}` folders) — this is a single-page comments
+  app, not a multi-page platform; a flat `components/` + `shared/` split is enough.
+- **Redux Toolkit + `DynamicModuleLoader`** (FSD's lazy-reducer-injection pattern) — no
+  global state store needed here; component state + Apollo Client's cache cover
+  everything this app does.
+- **i18n (`react-i18next`)** — not in the brief, single-language app.
+- **A full Storybook + Cypress harness per component** — reasonable for a real product's
+  design system, disproportionate for three UI primitives in a test assignment. Manual
+  QA + the existing GraphQL-level e2e coverage are enough.
+
+---
+
 ## Reference implementations for inspiration
 
 These are **architectural/UX references only** — study the patterns, do not copy code,
@@ -353,8 +450,12 @@ to lightbox2 as a UX reference, not a code source.
   its Docker Compose pattern with multiple services plus a queue (RabbitMQ) can be reused
   directly
 - **WordWeave** — REST + Feature-Sliced Design on the frontend — not a primary reference here
-  (this project uses GraphQL and the frontend comes later), but its form validation patterns
-  (React Hook Form + Zod) are worth reusing
+  (this project uses GraphQL, and FSD itself is overkill for this scope), but its
+  `shared/ui` SCSS Modules conventions (CSS-custom-property tokens, colocated
+  `Component.tsx` + `Component.module.scss` + `index.ts`, the `classNames()` helper, naming
+  conventions) are worth reusing — see "Styling approach" below. (Its form validation is
+  a hand-rolled TS validator wired through Redux selectors, not React Hook Form/Zod — this
+  project's use of React Hook Form + Zod is our own choice, not borrowed from WordWeave.)
 
 ---
 
