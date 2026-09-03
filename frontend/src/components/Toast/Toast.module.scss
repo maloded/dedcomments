@@ -1,0 +1,12 @@
+.Toast {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  z-index: var(--z-toast);
+  background: var(--color-text);
+  color: var(--color-surface);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  font: var(--font-sm);
+}

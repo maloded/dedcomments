@@ -293,6 +293,15 @@ export class CommentsService {
 		});
 
 		await this.cacheService.delByPattern(`${ROOT_COMMENTS_CACHE_PREFIX}*`);
+
+		// Mirrors emitCommentCreated below — a hide is the inverse of a create
+		// with respect to what clients need to update (repliesCount, whether a
+		// root row should disappear), so it gets the same live broadcast.
+		this.commentsGateway.emitCommentHidden({
+			id: updated.id,
+			parentId: updated.parentId,
+		});
+
 		return CommentsService.toModel(updated);
 	}
 

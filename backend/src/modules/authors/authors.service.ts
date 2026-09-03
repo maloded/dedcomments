@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import type { Author } from '@prisma/client';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { CommentsGateway } from '../gateway/comments.gateway';
 
 export interface AuthorIdentity {
 	username: string;
@@ -14,7 +15,10 @@ export interface AuthorIdentity {
 
 @Injectable()
 export class AuthorsService {
-	public constructor(private readonly prismaService: PrismaService) {}
+	public constructor(
+		private readonly prismaService: PrismaService,
+		private readonly commentsGateway: CommentsGateway,
+	) {}
 
 	/**
 	 * Find the Author row for this (username, email) identity or create it.
@@ -68,9 +72,19 @@ export class AuthorsService {
 			throw new NotFoundException(`Author "${authorId}" was not found.`);
 		}
 
-		return this.prismaService.author.update({
+		const updated = await this.prismaService.author.update({
 			where: { id: authorId },
 			data: { isBanned: true },
 		});
+
+		// No comment data changes here (existing comments stay, per the brief)
+		// — this just lets a connected client know an identity was banned, e.g.
+		// for a notice. Unlike commentHidden, there's nothing to remove.
+		this.commentsGateway.emitAuthorBanned({
+			id: updated.id,
+			username: updated.username,
+		});
+
+		return updated;
 	}
 }

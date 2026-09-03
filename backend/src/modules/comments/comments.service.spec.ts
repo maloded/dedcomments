@@ -67,7 +67,10 @@ describe('CommentsService', () => {
 	let authors: { findOrCreate: jest.Mock };
 	let captcha: { verify: jest.Mock };
 	let sanitizer: { sanitize: jest.Mock };
-	let gateway: { emitCommentCreated: jest.Mock };
+	let gateway: {
+		emitCommentCreated: jest.Mock;
+		emitCommentHidden: jest.Mock;
+	};
 	let service: CommentsService;
 
 	beforeEach(() => {
@@ -95,7 +98,10 @@ describe('CommentsService', () => {
 		};
 		captcha = { verify: jest.fn().mockResolvedValue(true) };
 		sanitizer = { sanitize: jest.fn((t: string) => t) };
-		gateway = { emitCommentCreated: jest.fn() };
+		gateway = {
+			emitCommentCreated: jest.fn(),
+			emitCommentHidden: jest.fn(),
+		};
 
 		prisma.comment.create.mockResolvedValue({
 			...rootRow({ id: 'comment-1', _count: { replies: 0 } }),
@@ -213,12 +219,45 @@ describe('CommentsService', () => {
 			expect(result.id).toBe('c1');
 		});
 
+		it('broadcasts commentHidden with the id and parentId, for a root comment', async () => {
+			prisma.comment.findUnique.mockResolvedValue({ id: 'c1' });
+			prisma.comment.update.mockResolvedValue(
+				rootRow({ id: 'c1', parentId: null, _count: { replies: 0 } }),
+			);
+
+			await service.hideComment('c1');
+
+			expect(gateway.emitCommentHidden).toHaveBeenCalledWith({
+				id: 'c1',
+				parentId: null,
+			});
+		});
+
+		it('broadcasts commentHidden with the parent id, for a hidden reply', async () => {
+			prisma.comment.findUnique.mockResolvedValue({ id: 'reply-1' });
+			prisma.comment.update.mockResolvedValue(
+				rootRow({
+					id: 'reply-1',
+					parentId: 'root-1',
+					_count: { replies: 0 },
+				}),
+			);
+
+			await service.hideComment('reply-1');
+
+			expect(gateway.emitCommentHidden).toHaveBeenCalledWith({
+				id: 'reply-1',
+				parentId: 'root-1',
+			});
+		});
+
 		it('404s for an unknown comment id', async () => {
 			prisma.comment.findUnique.mockResolvedValue(null);
 			await expect(service.hideComment('nope')).rejects.toBeInstanceOf(
 				NotFoundException,
 			);
 			expect(prisma.comment.update).not.toHaveBeenCalled();
+			expect(gateway.emitCommentHidden).not.toHaveBeenCalled();
 		});
 	});
 

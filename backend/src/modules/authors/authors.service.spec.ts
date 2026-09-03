@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { AuthorsService } from './authors.service';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { CommentsGateway } from '../gateway/comments.gateway';
 
 describe('AuthorsService', () => {
 	let prisma: {
@@ -10,6 +11,7 @@ describe('AuthorsService', () => {
 			update: jest.Mock;
 		};
 	};
+	let gateway: { emitAuthorBanned: jest.Mock };
 	let service: AuthorsService;
 
 	beforeEach(() => {
@@ -19,12 +21,18 @@ describe('AuthorsService', () => {
 				upsert: jest
 					.fn()
 					.mockResolvedValue({ id: 'a1', isBanned: false }),
-				update: jest
-					.fn()
-					.mockResolvedValue({ id: 'a1', isBanned: true }),
+				update: jest.fn().mockResolvedValue({
+					id: 'a1',
+					username: 'bob',
+					isBanned: true,
+				}),
 			},
 		};
-		service = new AuthorsService(prisma as unknown as PrismaService);
+		gateway = { emitAuthorBanned: jest.fn() };
+		service = new AuthorsService(
+			prisma as unknown as PrismaService,
+			gateway as unknown as CommentsGateway,
+		);
 	});
 
 	describe('findOrCreate', () => {
@@ -86,6 +94,17 @@ describe('AuthorsService', () => {
 				data: { isBanned: true },
 			});
 			expect(result.isBanned).toBe(true);
+		});
+
+		it('broadcasts authorBanned over the gateway', async () => {
+			prisma.author.findUnique.mockResolvedValue({ id: 'a1' });
+
+			await service.ban('a1');
+
+			expect(gateway.emitAuthorBanned).toHaveBeenCalledWith({
+				id: 'a1',
+				username: 'bob',
+			});
 		});
 
 		it('404s for an unknown author', async () => {

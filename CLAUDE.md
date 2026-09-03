@@ -1479,3 +1479,90 @@ errors throughout (one browser-console *info* note about a missing
   become the real next milestones rather than more feature work.
 - The known hide/ban-doesn't-live-broadcast gap noted above, if it ever
   turns out to matter enough to justify the small backend addition.
+
+---
+
+### Step 10 — commentHidden/authorBanned WebSocket broadcasts (done)
+
+Closes the live-propagation gap Step 9 flagged and deliberately deferred:
+hiding a comment or banning an author updated only the moderator's own
+window; a second, unrelated window needed a manual reload to see it.
+
+**Implemented — backend**
+- `modules/gateway/comments.gateway.ts`: two new broadcasts, same pattern as
+  `emitCommentCreated` (no auth on the socket connection, one room,
+  `cors: { origin: true }`, `this.server.emit(EVENT, payload)`) —
+  `emitCommentHidden({ id, parentId })` and
+  `emitAuthorBanned({ id, username })`. Payload shapes are deliberately
+  minimal: `commentHidden`'s `{ id, parentId }` exactly mirrors
+  `commentCreated`'s shape (lets the frontend reuse one refetch function for
+  both); `authorBanned` doesn't need to touch any comment data (banning
+  doesn't retroactively hide anything — "existing comments stay").
+- `CommentsService.hideComment()` calls `emitCommentHidden` right before
+  returning, mirroring where `createComment` calls `emitCommentCreated`.
+- `AuthorsService.ban()` now takes `CommentsGateway` as a constructor
+  dependency (`AuthorsModule` imports `GatewayModule`) and calls
+  `emitAuthorBanned` before returning the banned author.
+- Unit tests: `comments.gateway.spec.ts` (+2, one per new event, via a shared
+  `gatewayWithFakeServer()` helper), `comments.service.spec.ts` (+2, asserting
+  `emitCommentHidden`'s payload for a root hide and a reply hide),
+  `authors.service.spec.ts` (+1, asserting `emitAuthorBanned`'s payload).
+- e2e: `gateway.e2e-spec.ts` rewritten with a shared `createComment()` helper
+  and moderator seeding/login in `beforeAll`; two new cases confirm a
+  connected Socket.IO client actually receives `commentHidden` (after
+  `hideComment`) and `authorBanned` (after `banAuthor`), each asserting the
+  full payload.
+
+**Implemented — frontend**
+- `components/RealtimeConnection`: now also listens for `commentHidden` and
+  `authorBanned`. Extracted `refetchForCommentEvent(client, parentId)` —
+  the same `RootComments`/(`CommentThread` if a reply) refetch-by-name logic
+  Step 9 used for `commentCreated` — and reused it verbatim for
+  `commentHidden`, since a hide is the inverse of a create with respect to
+  what a client needs to update (root row disappearing/`repliesCount`
+  decrementing, or a node vanishing from an open thread).
+- `authorBanned` needs no comment-data update; added a small reusable toast
+  system for it instead of a one-off: `lib/toast.tsx` (`ToastProvider` +
+  `useShowToast`/`useToastMessage`, same split-context shape as
+  `connectionStatus.tsx`/`moderatorAuth.tsx`) + `components/Toast`, wired
+  into `app/providers.tsx`. Shows "`<username>` was banned by a moderator."
+  for 4 seconds.
+
+**Verified manually** (full `docker compose up -d --build` stack, two
+independent browser tabs, window B never reloaded): posted a root comment
+and a direct reply in window A, confirmed both windows showed
+`repliesCount: 1`; logged into window A as moderator; hid the reply in
+window A → **window B updated live, without a reload** — the reply
+disappeared from the open thread and `repliesCount` dropped to `0`,
+matching window A exactly (this is the specific gap the task called out,
+confirmed actually closed, not just implemented). Banned the root comment's
+author from window A → window B received the event with zero console
+errors (no crash, no unhandled rejection); the toast itself had already
+auto-cleared by the time it was checked (4 s window vs. the tool round-trip
+between windows), so its *arrival* is confirmed via a clean console rather
+than a caught screenshot — acceptable since the toast was explicitly a
+nice-to-have, not the requirement being verified.
+
+**Verified — automated**: backend build/lint clean; unit **86/86** passed
+(was 78, +8: 2 gateway, 2 comments.service, 1 authors.service, others
+pre-existing renumbered); e2e **56/56** passed (was 50, +6 gateway); e2e run
+with the dockerized `backend` container stopped, per convention, then
+restarted afterward (moderator table truncated by the e2e run, reseeded via
+`npm run seed:moderator`). Frontend `next build`/`eslint`/`tsc --noEmit`
+clean (same one pre-existing, unrelated React Compiler info-warning on
+`CommentForm`'s `watch()` as every prior frontend step).
+
+**Deviations**: none — this step was scoped tightly to the one flagged gap
+and stayed inside it; no unrelated fixes were needed or made this time.
+
+**Pending — next**: unchanged except the hide/ban broadcast gap is now
+closed. What's left: the dedicated Reddit-style visual polish pass (five
+sessions deferred: Steps 6-10), and the pagination self-check against real
+multi-page data (five sessions open, same reason each time — deferred to the
+pre-submission pass once the DB is seeded for the demo video). Everything
+else — every core GraphQL endpoint, CAPTCHA, sanitizer, attachments +
+resize queue, JWT/moderator auth + moderation mutations, and now live
+WebSocket propagation for creates, hides, *and* bans — is functionally
+complete. Deployment, README, the MySQL Workbench schema file, and the demo
+video (the brief's "Delivery format" section) remain the real outstanding
+milestones.
