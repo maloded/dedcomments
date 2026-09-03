@@ -1,0 +1,83 @@
+// Design tokens — CSS custom properties, not SCSS `$variables` (see CLAUDE.md →
+// "Styling approach"). This is what every component actually reads from
+// (`color: var(--text)`); nothing here is a compile-time-only SCSS indirection.
+//
+// One exception: the breakpoint values at the bottom are plain SCSS `$variables`,
+// not custom properties. CSS custom properties can't appear inside a `@media`
+// condition (`@media (max-width: var(--x))` isn't valid CSS — media features must
+// be literal at parse time), so breakpoints have to be a build-time SCSS value.
+
+:root {
+  // ─── Typography ──────────────────────────────────────────────────────────
+  --font-family-base: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+
+  --font-size-xs: 12px;
+  --font-line-xs: 16px;
+  --font-size-sm: 14px;
+  --font-line-sm: 20px;
+  --font-size-md: 16px;
+  --font-line-md: 24px;
+  --font-size-lg: 20px;
+  --font-line-lg: 28px;
+  --font-size-xl: 28px;
+  --font-line-xl: 36px;
+
+  // Composite shorthand tokens (size / line-height family), used as `font: var(--font-md)`.
+  --font-xs: var(--font-size-xs) / var(--font-line-xs) var(--font-family-base);
+  --font-sm: var(--font-size-sm) / var(--font-line-sm) var(--font-family-base);
+  --font-md: var(--font-size-md) / var(--font-line-md) var(--font-family-base);
+  --font-lg: var(--font-size-lg) / var(--font-line-lg) var(--font-family-base);
+  --font-xl: var(--font-size-xl) / var(--font-line-xl) var(--font-family-base);
+
+  // ─── Color (semantic) ────────────────────────────────────────────────────
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f0f2f5;
+  --color-border: #dde1e6;
+  --color-text: #1a202c;
+  --color-text-muted: #667085;
+  --color-hint: #98a2b3;
+
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-contrast: #ffffff;
+
+  --color-danger: #dc2626;
+  --color-danger-bg: #fef2f2;
+  --color-success: #16a34a;
+  --color-success-bg: #f0fdf4;
+
+  --color-link: var(--color-accent);
+  --color-code-bg: #f0f2f5;
+
+  // ─── Spacing scale ───────────────────────────────────────────────────────
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  // ─── Radius scale ────────────────────────────────────────────────────────
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  // ─── Shadow scale ────────────────────────────────────────────────────────
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.1);
+
+  // ─── Z-index scale ───────────────────────────────────────────────────────
+  // Not all of these are used yet (dropdown/lightbox come with later work) — kept
+  // together so future additions don't invent ad hoc numbers.
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-modal: 100;
+  --z-lightbox: 200;
+  --z-toast: 300;
+}
+
+// ─── Breakpoints (SCSS build-time variables — see file header) ──────────────
+$breakpoint-mobile: 640px;

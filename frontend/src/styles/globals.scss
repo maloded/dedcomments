@@ -1,0 +1,42 @@
+@use "tokens";
+
+// Minimal reset — just enough to get a consistent baseline across browsers,
+// not a full Meyer/Normalize reset (this is a small app, not a design system).
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: var(--font-md);
+}
+
+a {
+  color: var(--color-link);
+}
+
+button {
+  font: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+// App shell — the page content column. Kept here rather than per-page since every
+// page in this app shares the same single-column layout.
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4);
+}

@@ -1,0 +1,100 @@
+.RootCommentsTable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.error {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+// Wide table, small screen — scroll inside its own box rather than the page.
+.scroll {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--font-sm);
+
+  th,
+  td {
+    text-align: left;
+    padding: var(--space-3) var(--space-4);
+    white-space: nowrap;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  th {
+    color: var(--color-text-muted);
+    font-weight: 600;
+  }
+
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  tbody tr:hover {
+    background: var(--color-surface-muted);
+  }
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+
+  &:hover,
+  &.active {
+    color: var(--color-accent);
+  }
+}
+
+.sortArrow {
+  font-size: var(--font-size-xs);
+}
+
+.empty {
+  text-align: center;
+  color: var(--color-text-muted);
+  padding: var(--space-5);
+  white-space: normal;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.count {
+  color: var(--color-text-muted);
+  font: var(--font-sm);
+}
+
+.pageControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pageNumber {
+  font: var(--font-sm);
+  color: var(--color-text-muted);
+}

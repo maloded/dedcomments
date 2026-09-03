@@ -1,0 +1,18 @@
+query RootComments($page: Int!, $sortBy: RootCommentSortField!, $sortOrder: SortOrder!) {
+  rootComments(page: $page, sortBy: $sortBy, sortOrder: $sortOrder) {
+    page
+    totalCount
+    totalPages
+    items {
+      id
+      text
+      createdAt
+      repliesCount
+      author {
+        id
+        username
+        email
+      }
+    }
+  }
+}

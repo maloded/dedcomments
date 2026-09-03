@@ -1,0 +1,122 @@
+.CommentForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.heading {
+  font: var(--font-lg);
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+
+  > * {
+    flex: 1 1 200px;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.label {
+  font: var(--font-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.input,
+.textarea {
+  font: var(--font-md);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+
+  &:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -1px;
+  }
+}
+
+.textarea {
+  resize: vertical;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.fieldError {
+  font: var(--font-xs);
+  color: var(--color-danger);
+}
+
+.preview {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  min-height: var(--font-line-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+
+  :global(code) {
+    background: var(--color-code-bg);
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-1);
+    font-family: var(--font-family-mono);
+  }
+}
+
+.captchaRow {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.captchaImageBox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.captchaImage {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  height: 44px;
+}
+
+.captchaPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  width: 150px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font: var(--font-xs);
+}
+
+.formError {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin: 0;
+}
+
+.formSuccess {
+  color: var(--color-success);
+  background: var(--color-success-bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin: 0;
+}

@@ -934,3 +934,153 @@ afterward (`npm run seed:moderator`) purely as a courtesy, since running e2e tru
 
 **Verified**: build / lint / **79 unit** (unchanged) / **51 e2e** green, three clean
 consecutive full-suite runs plus the dirty-state run above (4 total in a row, all green).
+
+---
+
+### Step 6 — Frontend setup, root comments table, comment submission form (done)
+
+First frontend session — backend treated as a stable contract (schema.gql +
+51 e2e tests), no backend changes this step.
+
+**Implemented — project setup**
+- Next.js 16 (App Router, TypeScript, Turbopack) scaffolded into `frontend/`
+  (`create-next-app --typescript --eslint --no-tailwind --src-dir --app`), React 19.
+  Default Tailwind/`globals.css`/sample assets removed — this project uses SCSS
+  Modules (CLAUDE.md → "Styling approach"), not Tailwind.
+- **Apollo Client v4** (`@apollo/client` + `@apollo/client/react` — v4 split core
+  and React hooks into separate entry points, a real structural change from v3).
+  `src/lib/apolloClient.ts` builds one browser-only client (`HttpLink` +
+  `InMemoryCache`) from `NEXT_PUBLIC_GRAPHQL_URL`; `src/app/providers.tsx` wraps it
+  in `<ApolloProvider>`. `.env.example` + gitignored `.env.local`
+  (`NEXT_PUBLIC_GRAPHQL_URL=http://localhost:4000/graphql`); fixed `frontend/.gitignore`
+  to keep `.env.example` committed like the backend's (create-next-app's default
+  `.env*` pattern would have ignored it too).
+- **GraphQL Codegen**, schema source = the backend's committed `schema.gql` (not
+  live introspection — works without the backend running, can't drift from what's
+  checked in). `src/graphql/operations/*.graphql` (RootComments, CaptchaChallenge,
+  CreateComment) → `src/graphql/generated.ts`, committed like `schema.gql` is.
+  `npm run codegen` / `codegen:watch`.
+- Styling foundation exactly per CLAUDE.md's plan: `styles/tokens.scss` (CSS custom
+  properties — typography, semantic color, `--space-1..6`, `--radius-sm/md/lg/pill`,
+  `--shadow-sm/md`, `--z-*`) + `styles/globals.scss` (minimal reset, imports
+  tokens), `shared/lib/classNames.ts` (WordWeave's `(base, mods, additional)`
+  helper, ported), `shared/ui/{Button,Card,Skeleton}` — each
+  `Component.tsx` + `Component.module.scss` + `index.ts`, no kit-wide barrel.
+- `frontend/Dockerfile` (multi-stage; `next.config.ts` sets `output: "standalone"`
+  for a lean runtime image) + `frontend` service added to the root
+  `docker-compose.yml`, `depends_on: backend`, port 3000.
+
+**Implemented — root comments table** (`components/RootCommentsTable`)
+- Owns its own `useQuery(RootCommentsDocument, { variables: { page, sortBy,
+  sortOrder } })` — no prop wiring to the form (see below). Columns: Username,
+  Email, Date, Replies, and a disabled "Expand" placeholder button (thread view is
+  next session). Clickable Username/Email/Date headers toggle ASC/DESC, with an
+  arrow indicator; switching columns resets to page 1 and picks a sensible default
+  direction (DESC/newest-first for Date, ASC for Username/Email). 25/page from the
+  backend, Prev/Next + "Page X of Y", both buttons correctly disabled at the ends.
+  Skeleton placeholder rows while loading, a plain-language empty state, an error
+  banner on query failure.
+
+**Implemented — comment submission form** (`components/CommentForm` +
+`components/TagToolbar`)
+- Username / E-mail / Home page (optional) / Text, validated with React Hook Form +
+  Zod mirroring the backend's rules (`lib/validation.ts` duplicates
+  `USERNAME_REGEX`/`CAPTCHA_REGEX`/`COMMENT_TEXT_MAX_LENGTH` from
+  `backend/src/shared/constants` by hand — no shared workspace, see "Repository
+  structure" — commented as such; the backend re-validates everything regardless).
+  Zod v4's `z.email()`/`z.httpUrl()` (not the deprecated `.email()`/`.url()` chain
+  methods).
+- CAPTCHA: `useQuery(CaptchaChallengeDocument, { fetchPolicy: "no-cache" })` so
+  every mount and every "↻ New" click gets a genuinely fresh, uncached challenge;
+  the SVG (`data:image/svg+xml;base64,…`) renders directly in an `<img>`.
+- `TagToolbar`: `[i] [strong] [code] [Link]` buttons. Wrapping logic lives in
+  `CommentForm` (it owns the textarea ref) — wraps the current selection or inserts
+  at the cursor; `Link` prompts for href + optional title via `window.prompt`
+  (no modal component built for this — proportional to what a test assignment
+  needs) and emits `<a href="" title="">`.
+- Live preview: `shared/lib/commentPreview.ts` — escapes the whole string first,
+  then selectively un-escapes *only* the exact allowed tag shapes (`<a href="" 
+  title="">`, `<code>`, `<i>`, `<strong>`, with an href scheme check), rendered via
+  `dangerouslySetInnerHTML`. Deliberately not a full parser (doesn't need to be —
+  the backend is the real sanitizer); safe because it's the user's own input,
+  previewed only in their own browser, and the allowlist regexes are anchored
+  narrowly enough that any unexpected attribute or malformed tag just fails to
+  match and stays escaped/inert rather than rendering.
+- Error handling keys off `CombinedGraphQLErrors` (Apollo v4's replacement for the
+  old `ApolloError`) and the backend's `extensions.code`: `THROTTLER` → a
+  rate-limit message; `BAD_REQUEST` mentioning "captcha" → inline field error +
+  auto-refresh challenge; other `BAD_REQUEST` → routed to the relevant field by a
+  small message-content heuristic (falls back to a general error banner);
+  `FORBIDDEN` (banned author) and anything else → general error banner.
+- On success: `useMutation(CreateCommentDocument, { refetchQueries: ["RootComments"]
+  })` — refetches the table via Apollo's operation-name tracking, no ref/callback
+  wiring needed between the two sibling components. Form resets, a new CAPTCHA
+  loads, a brief success message shows.
+- `parentId?: string` prop, threaded straight into the mutation input and into the
+  "Reply" vs. "Leave a comment" heading — not wired to any reply UI yet (next
+  session), but ready to be reused for it.
+
+**Deviations from the plan (with reasons)**
+- **`ssr: false` on the whole page** (`app/page.tsx` dynamically imports
+  `components/HomeView`). This app is a SPA per the brief and fetches everything
+  client-side; without this, Next's App Router would still attempt a server-side
+  render of the Apollo-querying tree on every request, and inside Docker that
+  server-side fetch would hit `http://localhost:4000` from *inside the frontend
+  container*, which doesn't reach the backend container (they're separate network
+  namespaces) — `localhost` there means the frontend container itself. Rather than
+  add a second, server-only `GRAPHQL_URL` purely to paper over that, opting out of
+  SSR for this tree sidesteps the problem entirely, and costs nothing for a SPA
+  that doesn't need SSR's benefits (no SEO/first-paint requirement in the brief).
+  Confirmed in the production build: `/` prerenders with a `BAILOUT_TO_CLIENT_SIDE_RENDERING`
+  marker, no server-side fetch attempted.
+- **No base `typescript` codegen plugin** — combining it with `typescript-operations`
+  in one output file (the standard textbook setup) turned out to redeclare every
+  input/enum type used as an operation *variable* type (`CreateCommentInput`,
+  `RootCommentSortField`, `SortOrder` all came out twice — a real duplicate-export
+  TS error), traced to `typescript-operations`'s `_usedSchemaTypes` gating in
+  `visitor-plugin-common` 7.2.5. `typescript-operations` is self-sufficient for
+  everything this app needs (operation result/variable types + the input/enum
+  types they reference), so the fix was dropping the base plugin rather than
+  fighting the duplication — documented inline in `codegen.ts`.
+- **No hook-generating codegen plugin** (`typescript-react-apollo`) — used
+  `typed-document-node` instead, giving plain `TypedDocumentNode<Result,
+  Variables>` consts passed straight into `useQuery`/`useMutation`. Sidesteps any
+  version-compatibility risk between the hook-generator plugin and Apollo Client
+  v4's restructured import paths (`@apollo/client/react`), and is the more current
+  Apollo-recommended pattern regardless.
+- **Home page (optional) is validated when present, not skipped via
+  `@IsOptional()`-equivalent laxness** — `z.union([z.literal(""), z.httpUrl(...)])`,
+  and only the non-empty case is sent to the mutation at all (an empty field is
+  omitted from the GraphQL variables object entirely, not sent as `""`, so the
+  backend's `@IsOptional() @IsUrl()` sees it as genuinely absent rather than an
+  invalid empty string).
+- **Breakpoints are SCSS `$variables`, not CSS custom properties** — the original
+  "Styling approach" section's example (`--breakpoint-mobile: 640px`) doesn't
+  actually work: CSS custom properties can't appear inside a `@media` condition
+  (media features must be literal at parse time). `tokens.scss` keeps a
+  `$breakpoint-mobile` SCSS variable alongside the `:root` custom-property block
+  instead, documented inline as the one deliberate exception to "tokens are custom
+  properties, not SCSS variables." Not yet used by any component — the tree view's
+  mobile depth cap (next session) will be the first consumer.
+
+**Verified manually** (via a live browser against the full `docker compose up -d
+--build` stack — postgres/redis/rabbitmq/backend/frontend, not just against unit
+tests): page loads with an empty root table + working CAPTCHA; posted a comment
+with the [strong] toolbar button (selection correctly wrapped, live preview
+rendered it bold in real time) → success message, form cleared, new CAPTCHA
+loaded, table refetched and showed the new row; submitted a wrong CAPTCHA answer →
+inline field error, a fresh CAPTCHA auto-loaded, username/email/text preserved, no
+row created; posted two more comments (`Zed`, `amy`) and sorted by Username
+ascending/descending — confirmed case-insensitive order (`alice, amy, Zed`
+ascending, matching the backend fix from the previous session) with the arrow
+indicator flipping correctly; no console errors/warnings throughout. Pagination's
+Prev/Next disabled-state logic was verified structurally (3 comments = 1 page) but
+not against a 26+-comment second page — flagged rather than force-generated for
+this pass.
+
+**Pending — next session**: recursive tree view (`commentThread`, expand/collapse,
+depth-capped indentation + thread-line, the `$breakpoint-mobile` mobile cap),
+attachment upload + lightbox (with polling for `processedAt` while the RabbitMQ
+consumer resizes an image — the `Skeleton` component is already in place for
+this), the `commentCreated` WebSocket subscription for live updates, and moderator
+login + hide/ban UI.

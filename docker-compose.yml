@@ -93,6 +93,24 @@ services:
     networks:
       - comments
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Inlined into the client bundle at build time (see frontend/Dockerfile) —
+        # the *browser* calls this, not the frontend container, so it's the
+        # host-published backend port, not the in-network service name.
+        NEXT_PUBLIC_GRAPHQL_URL: ${NEXT_PUBLIC_GRAPHQL_URL:-http://localhost:4000/graphql}
+    container_name: comments_frontend
+    restart: always
+    ports:
+      - '3000:3000'
+    depends_on:
+      - backend
+    networks:
+      - comments
+
 volumes:
   postgres_data:
   redis_data:
