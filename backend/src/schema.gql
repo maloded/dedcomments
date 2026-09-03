@@ -127,6 +127,11 @@ type Mutation {
 
 type Query {
   """
+  Look up one attachment by id (linked to a comment or not). Meant for polling `processedAt` on a just-uploaded image while it's resized on the queue, before it has a comment (and thus a `commentThread`) to be reached through.
+  """
+  attachment(id: ID!): AttachmentModel!
+
+  """
   Generate a fresh CAPTCHA (token + SVG image). Solve it and pass `token` + answer to `createComment`.
   """
   captchaChallenge: CaptchaChallengeModel!

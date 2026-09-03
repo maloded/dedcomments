@@ -1,0 +1,10 @@
+mutation UploadAttachment($input: UploadAttachmentInput!) {
+  uploadAttachment(input: $input) {
+    id
+    type
+    url
+    originalName
+    size
+    processedAt
+  }
+}

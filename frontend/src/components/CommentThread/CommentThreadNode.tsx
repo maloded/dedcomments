@@ -3,6 +3,7 @@
 import { useState, type CSSProperties } from "react";
 import { Button } from "@/shared/ui/Button";
 import { CommentForm } from "@/components/CommentForm";
+import { AttachmentPreview } from "@/components/AttachmentPreview";
 import { previewCommentHtml } from "@/shared/lib/commentPreview";
 import { classNames } from "@/shared/lib/classNames";
 import cls from "./CommentThread.module.scss";
@@ -21,6 +22,12 @@ export interface ThreadNode {
   createdAt: string;
   repliesCount: number;
   author: { id: string; username: string; email: string };
+  attachment: {
+    id: string;
+    type: "IMAGE" | "TEXT";
+    url: string;
+    originalName: string;
+  } | null;
   replies: ThreadNode[];
 }
 
@@ -93,6 +100,15 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           // tags the backend already validated this text against on submit.
           dangerouslySetInnerHTML={{ __html: previewCommentHtml(node.text) }}
         />
+        {node.attachment && (
+          <div className={cls.attachment}>
+            <AttachmentPreview
+              type={node.attachment.type}
+              url={node.attachment.url}
+              originalName={node.attachment.originalName}
+            />
+          </div>
+        )}
         <div className={cls.actions}>
           <Button size="sm" variant="clear" onClick={() => setReplying((r) => !r)}>
             {replying ? "Cancel" : "Reply"}

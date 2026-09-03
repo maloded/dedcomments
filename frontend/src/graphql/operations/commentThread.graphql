@@ -9,6 +9,14 @@ fragment CommentThreadFields on ThreadCommentModel {
     username
     email
   }
+  attachment {
+    id
+    type
+    url
+    originalName
+    size
+    processedAt
+  }
 }
 
 # GraphQL has no recursive-fragment construct (a fragment can't spread itself),

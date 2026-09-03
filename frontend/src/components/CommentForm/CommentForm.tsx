@@ -1,26 +1,38 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery } from "@apollo/client/react";
 import { CombinedGraphQLErrors } from "@apollo/client/errors";
 import {
+  AttachmentDocument,
   CaptchaChallengeDocument,
   CreateCommentDocument,
+  UploadAttachmentDocument,
+  type UploadAttachmentMutation,
 } from "@/graphql/generated";
 import {
+  ALLOWED_IMAGE_EXTENSIONS,
+  ALLOWED_IMAGE_MIME_TYPES,
+  ALLOWED_TEXT_EXTENSIONS,
   CAPTCHA_REGEX,
   COMMENT_TEXT_MAX_LENGTH,
+  MAX_UPLOAD_BYTES,
+  TEXT_FILE_MAX_BYTES,
   USERNAME_MAX_LENGTH,
   USERNAME_REGEX,
 } from "@/lib/validation";
 import { previewCommentHtml } from "@/shared/lib/commentPreview";
 import { Card } from "@/shared/ui/Card";
 import { Button } from "@/shared/ui/Button";
+import { Skeleton } from "@/shared/ui/Skeleton";
 import { TagToolbar, type WrapTag } from "@/components/TagToolbar";
+import { AttachmentPreview } from "@/components/AttachmentPreview";
 import cls from "./CommentForm.module.scss";
+
+type UploadedAttachment = UploadAttachmentMutation["uploadAttachment"];
 
 const commentFormSchema = z.object({
   username: z
@@ -62,6 +74,11 @@ const WRAP_TAGS: Record<WrapTag, [string, string]> = {
   code: ["<code>", "</code>"],
 };
 
+// Only images ever need this — text attachments come back from
+// `uploadAttachment` with `processedAt` already set (synchronous, no queue).
+const ATTACHMENT_POLL_INTERVAL_MS = 1500;
+const ATTACHMENT_POLL_TIMEOUT_MS = 15_000;
+
 /** Loosely matches the backend's coded error messages back to a form field. */
 function fieldForErrorMessage(message: string): keyof CommentFormValues | null {
   const m = message.toLowerCase();
@@ -80,10 +97,40 @@ function fieldForErrorMessage(message: string): keyof CommentFormValues | null {
   return null;
 }
 
+function extensionOf(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  return dot === -1 ? "" : filename.slice(dot).toLowerCase();
+}
+
+/** A `data:<mime>;base64,...` URL — the backend accepts this prefix directly. */
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Some browsers/OSes leave `file.type` empty for a plain .txt — fall back to extension. */
+function inferMimeType(file: File, isImage: boolean): string {
+  if (file.type) return file.type;
+  switch (extensionOf(file.name)) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    default:
+      return isImage ? "application/octet-stream" : "text/plain";
+  }
+}
+
 interface CommentFormProps {
-  /** Omit for a root comment; pass a comment id to post a reply to it. Reply
-   * UI itself isn't wired up yet (CLAUDE.md — next session), but the component
-   * is ready to be reused for it. */
+  /** Omit for a root comment; pass a comment id to post a reply to it —
+   * `CommentThreadNode` reuses this component for inline replies. */
   parentId?: string;
   onSuccess?: () => void;
   className?: string;
@@ -99,8 +146,51 @@ export function CommentForm(props: CommentFormProps) {
   const { parentId, onSuccess, className } = props;
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const [attachment, setAttachment] = useState<UploadedAttachment | null>(null);
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [uploadAttachmentMutation] = useMutation(UploadAttachmentDocument);
+
+  // Set once an uploaded image comes back with `processedAt: null` (queued for
+  // resize) — `null` the rest of the time, including for text attachments,
+  // which are already fully processed in the upload response.
+  const [pollingAttachmentId, setPollingAttachmentId] = useState<string | null>(null);
+  const { data: polledAttachment, stopPolling } = useQuery(AttachmentDocument, {
+    variables: { id: pollingAttachmentId ?? "" },
+    skip: !pollingAttachmentId,
+    pollInterval: ATTACHMENT_POLL_INTERVAL_MS,
+    fetchPolicy: "network-only",
+  });
+
+  // Poll → success: the resize finished, swap in the final (resized) attachment.
+  useEffect(() => {
+    const polled = polledAttachment?.attachment;
+    if (polled?.processedAt) {
+      setAttachment(polled);
+      setPollingAttachmentId(null);
+      stopPolling();
+    }
+  }, [polledAttachment, stopPolling]);
+
+  // Poll → timeout: give up after ATTACHMENT_POLL_TIMEOUT_MS so the user isn't
+  // stuck forever — clear the attachment so submit isn't blocked on it.
+  useEffect(() => {
+    if (!pollingAttachmentId) return undefined;
+
+    const timeout = setTimeout(() => {
+      stopPolling();
+      setPollingAttachmentId(null);
+      setAttachment(null);
+      clearFileInput();
+      setAttachmentError("Could not process the attachment in time. Please try a different file.");
+    }, ATTACHMENT_POLL_TIMEOUT_MS);
+
+    return () => clearTimeout(timeout);
+  }, [pollingAttachmentId, stopPolling]);
 
   const {
     register,
@@ -164,6 +254,90 @@ export function CommentForm(props: CommentFormProps) {
     }
   }
 
+  function clearFileInput() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  function handleRemoveAttachment() {
+    setAttachment(null);
+    setAttachmentError(null);
+    setPollingAttachmentId(null);
+    stopPolling();
+    clearFileInput();
+  }
+
+  /**
+   * Uploads immediately on selection — matches the manual GraphQL Sandbox
+   * testing flow (upload first, link on submit), not "stage a file, upload on
+   * submit". Validates client-side first (type + the text 100 KB cap +
+   * the general upload-size ceiling) purely to avoid a pointless base64 +
+   * round trip for a file that's certain to be rejected — the backend
+   * re-validates everything (MIME + extension + magic bytes) regardless.
+   */
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setAttachmentError(null);
+    const ext = extensionOf(file.name);
+    const isImage =
+      ALLOWED_IMAGE_MIME_TYPES.includes(
+        file.type as (typeof ALLOWED_IMAGE_MIME_TYPES)[number],
+      ) || ALLOWED_IMAGE_EXTENSIONS.includes(ext as (typeof ALLOWED_IMAGE_EXTENSIONS)[number]);
+    const isText =
+      file.type === "text/plain" ||
+      ALLOWED_TEXT_EXTENSIONS.includes(ext as (typeof ALLOWED_TEXT_EXTENSIONS)[number]);
+
+    if (!isImage && !isText) {
+      setAttachmentError("Only JPG/PNG/GIF images or a .txt file are allowed.");
+      clearFileInput();
+      return;
+    }
+    if (isText && file.size > TEXT_FILE_MAX_BYTES) {
+      setAttachmentError(`Text files must be ${TEXT_FILE_MAX_BYTES / 1024} KB or smaller.`);
+      clearFileInput();
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setAttachmentError(`File must be ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB or smaller.`);
+      clearFileInput();
+      return;
+    }
+
+    setAttachmentUploading(true);
+    try {
+      const data = await readFileAsDataUrl(file);
+      const result = await uploadAttachmentMutation({
+        variables: {
+          input: {
+            filename: file.name,
+            mimeType: inferMimeType(file, isImage),
+            data,
+          },
+        },
+      });
+      if (result.data) {
+        const uploaded = result.data.uploadAttachment;
+        setAttachment(uploaded);
+        if (uploaded.type === "IMAGE" && !uploaded.processedAt) {
+          // Queued for resize — start polling attachment(id) for processedAt.
+          setPollingAttachmentId(uploaded.id);
+        }
+      }
+    } catch (err) {
+      setAttachmentError(
+        CombinedGraphQLErrors.is(err)
+          ? (err.errors[0]?.message ?? "Upload failed. Please try again.")
+          : "Upload failed. Please try again.",
+      );
+      clearFileInput();
+    } finally {
+      setAttachmentUploading(false);
+    }
+  }
+
   async function onSubmit(values: CommentFormValues) {
     setFormError(null);
     setSuccessMessage(null);
@@ -185,6 +359,7 @@ export function CommentForm(props: CommentFormProps) {
             captchaAnswer: values.captchaAnswer,
             ...(values.homepage ? { homepage: values.homepage } : {}),
             ...(parentId ? { parentId } : {}),
+            ...(attachment ? { attachmentId: attachment.id } : {}),
           },
         },
         // Keeps the root table's list + counts in sync without any prop wiring
@@ -200,6 +375,7 @@ export function CommentForm(props: CommentFormProps) {
       });
 
       reset(DEFAULT_VALUES);
+      handleRemoveAttachment();
       setSuccessMessage("Comment posted.");
       onSuccess?.();
       await refetchCaptcha();
@@ -304,6 +480,52 @@ export function CommentForm(props: CommentFormProps) {
           />
         </div>
 
+        <div className={cls.field}>
+          <span className={cls.label}>Attachment (optional)</span>
+
+          {!attachment && (
+            <input
+              ref={fileInputRef}
+              className={cls.fileInput}
+              type="file"
+              accept=".jpg,.jpeg,.png,.gif,.txt,image/jpeg,image/png,image/gif,text/plain"
+              onChange={(e) => {
+                void handleFileChange(e);
+              }}
+              disabled={attachmentUploading}
+            />
+          )}
+
+          {attachmentUploading && (
+            <div className={cls.attachmentPending}>
+              <Skeleton width={120} height={16} />
+              <span className={cls.attachmentStatus}>Uploading…</span>
+            </div>
+          )}
+
+          {!attachmentUploading && pollingAttachmentId && (
+            <div className={cls.attachmentPending}>
+              <Skeleton width={120} height={90} />
+              <span className={cls.attachmentStatus}>Processing image…</span>
+            </div>
+          )}
+
+          {attachment && !attachmentUploading && !pollingAttachmentId && (
+            <div className={cls.attachmentDone}>
+              <AttachmentPreview
+                type={attachment.type}
+                url={attachment.url}
+                originalName={attachment.originalName}
+              />
+              <Button type="button" size="sm" variant="clear" onClick={handleRemoveAttachment}>
+                Remove
+              </Button>
+            </div>
+          )}
+
+          {attachmentError && <span className={cls.fieldError}>{attachmentError}</span>}
+        </div>
+
         <div className={cls.captchaRow}>
           <label className={cls.field}>
             <span className={cls.label}>CAPTCHA</span>
@@ -343,7 +565,13 @@ export function CommentForm(props: CommentFormProps) {
         {formError && <p className={cls.formError}>{formError}</p>}
         {successMessage && <p className={cls.formSuccess}>{successMessage}</p>}
 
-        <Button type="submit" variant="filled" disabled={isSubmitting || captchaLoading}>
+        <Button
+          type="submit"
+          variant="filled"
+          disabled={
+            isSubmitting || captchaLoading || attachmentUploading || Boolean(pollingAttachmentId)
+          }
+        >
           {isSubmitting ? "Posting…" : "Post comment"}
         </Button>
       </form>

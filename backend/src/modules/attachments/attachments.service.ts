@@ -5,6 +5,7 @@ import {
 	Inject,
 	Injectable,
 	Logger,
+	NotFoundException,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import type { Attachment } from '@prisma/client';
@@ -99,6 +100,23 @@ export class AttachmentsService {
 		throw new BadRequestException(
 			`Unsupported file type "${input.mimeType}". Allowed: JPG / GIF / PNG images, or a .txt file.`,
 		);
+	}
+
+	/**
+	 * Look up one attachment by id, linked or not. Exists so the frontend can
+	 * poll `processedAt` on a just-uploaded (not-yet-linked) image while the
+	 * RabbitMQ consumer resizes it — `commentThread`'s `attachment` field only
+	 * becomes reachable once the attachment is linked to a comment, which is
+	 * too late for that pre-submit polling case.
+	 */
+	public async findById(id: string): Promise<AttachmentModel> {
+		const attachment = await this.prismaService.attachment.findUnique({
+			where: { id },
+		});
+		if (!attachment) {
+			throw new NotFoundException(`Attachment "${id}" was not found.`);
+		}
+		return AttachmentsService.toModel(attachment);
 	}
 
 	/** Called by the RabbitMQ consumer for image attachments. */

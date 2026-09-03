@@ -288,6 +288,77 @@ describe('uploadAttachment + resize queue (e2e)', () => {
 		expect(res.errors?.[0].extensions?.code).toBe('NOT_FOUND');
 	});
 
+	describe('attachment(id) query', () => {
+		const ATTACHMENT = `query ($id: ID!) {
+  attachment(id: $id) { id type url originalName size processedAt }
+}`;
+
+		/**
+		 * Added so the frontend can poll `processedAt` on a just-uploaded image
+		 * before it's linked to any comment (`commentThread` only reaches an
+		 * attachment once it's linked — too late for that case).
+		 */
+		it('is reachable immediately after upload (processedAt still null), then reflects the resize once done', async () => {
+			const res = await upload(
+				'poll-me.png',
+				'image/png',
+				await solidPng(500, 500),
+			);
+			const id = res.data!.uploadAttachment!.id;
+
+			const immediate = await gql<{
+				attachment: { id: string; processedAt: string | null };
+			}>({ query: ATTACHMENT, variables: { id } });
+			expect(immediate.data!.attachment.id).toBe(id);
+			expect(immediate.data!.attachment.processedAt).toBeNull();
+
+			await waitProcessed(id);
+
+			const after = await gql<{
+				attachment: { processedAt: string | null; url: string };
+			}>({ query: ATTACHMENT, variables: { id } });
+			expect(after.data!.attachment.processedAt).not.toBeNull();
+		});
+
+		it('works for a linked attachment too (not just pre-submit ones)', async () => {
+			const res = await upload(
+				'note.txt',
+				'text/plain',
+				Buffer.from('hi'),
+			);
+			const id = res.data!.uploadAttachment!.id;
+
+			const { token, answer } = await solvedCaptcha();
+			await gql({
+				query: `mutation ($i: CreateCommentInput!) { createComment(input: $i) { id } }`,
+				variables: {
+					i: {
+						username: `attq${Date.now()}`,
+						email: `attq${Date.now()}@example.com`,
+						text: 'has an attachment',
+						captchaToken: token,
+						captchaAnswer: answer,
+						attachmentId: id,
+					},
+				},
+			});
+
+			const linked = await gql<{ attachment: { id: string } }>({
+				query: ATTACHMENT,
+				variables: { id },
+			});
+			expect(linked.data!.attachment.id).toBe(id);
+		});
+
+		it('404s for an unknown id', async () => {
+			const res = await gql<{ attachment: unknown }>({
+				query: ATTACHMENT,
+				variables: { id: '00000000-0000-4000-8000-000000000000' },
+			});
+			expect(res.errors?.[0].extensions?.code).toBe('NOT_FOUND');
+		});
+	});
+
 	// Regression: `GqlThrottlerGuard` is registered globally (`APP_GUARD` in
 	// CoreModule), so Nest runs it in front of the RabbitMQ consumer's
 	// `@EventPattern` handler too, not just GraphQL resolvers. The global test

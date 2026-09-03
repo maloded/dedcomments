@@ -20,3 +20,23 @@ export const COMMENT_TEXT_MAX_LENGTH = 20_000;
 
 /** The only HTML tags the backend's sanitizer accepts (brief §5). */
 export const ALLOWED_HTML_TAGS = ["a", "code", "i", "strong"] as const;
+
+// ─── Attachments ─────────────────────────────────────────────────────────────
+// Mirrors the backend's constants too. The 320×240 resize itself is server-only
+// (there's nothing to reject client-side — any image size is accepted and
+// resized down), but the file-type/size checks are worth doing client-side to
+// avoid a pointless base64 + round trip for a file that's certain to be rejected.
+
+export const ALLOWED_IMAGE_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+] as const;
+export const ALLOWED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif"] as const;
+
+/** Text attachments: plain-text only, hard cap 100 KB. */
+export const TEXT_FILE_MAX_BYTES = 100 * 1024;
+export const ALLOWED_TEXT_EXTENSIONS = [".txt"] as const;
+
+/** Same hard ceiling as the backend's MAX_UPLOAD_BYTES (applies to either kind). */
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;

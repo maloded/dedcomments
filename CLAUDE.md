@@ -1203,3 +1203,125 @@ unrelated to this step, same as Step 6).
   self-check pass, when the DB gets seeded with enough comments for the demo
   video anyway — don't let that pass skip actually clicking Next once real
   paginated data exists.
+
+---
+
+### Step 8 — attachment upload, processedAt polling, lightbox (done)
+
+Structure/functionality this pass, same minimal-styling note as Step 7 —
+existing tokens, basic spacing/borders, no Reddit-style polish yet (still
+tracked below).
+
+**Schema investigation (Step 2.1) — a real gap, resolved by a small backend
+change, not a frontend workaround.** Checked `backend/src/schema.gql` and
+`AttachmentsResolver` before writing any polling code: only
+`Mutation.uploadAttachment` existed. `ThreadCommentModel.attachment` is only
+reachable via `commentThread(rootId)`, which needs the attachment already
+linked to a comment — too late for the pre-submit case (upload happens before
+the comment, or any linking, exists). Text attachments were never affected
+(`processedAt` is stamped synchronously in the upload response); this was an
+images-only gap. Stopped and asked rather than guessing — offered three
+options (add a backend query / skip real polling and treat upload-response as
+done / a fake timer standing in for a signal it can't give); **chose to add
+the backend query**. Implemented:
+- `AttachmentsService.findById(id)` (new) — plain `prisma.attachment.findUnique`
+  + `NotFoundException`, same shape/style as `assertAttachmentLinkable`.
+- `AttachmentsResolver`: new `Query.attachment(id: ID!): AttachmentModel!`.
+  `schema.gql` regenerated (had to actually boot the app once — `autoSchemaFile`
+  writes it at Nest bootstrap, not at `tsc` build time — briefly on a spare
+  port with the docker `backend` container stopped, to avoid a port clash and
+  queue-consumer contention with the e2e run right after).
+- Tests: **2 new unit** (found / 404) + **3 new e2e** (reachable immediately
+  post-upload with `processedAt: null`, reflects the resize once
+  `waitProcessed` confirms it server-side, works for an already-linked
+  attachment too, 404 for an unknown id) — **81 unit / 54 e2e**, both green,
+  e2e run twice back-to-back for stability.
+
+**Implemented — frontend, Step 1 (upload)**
+- `CommentForm` (both root and reply — it's the same component): a file input,
+  client-side validation mirroring backend constants (now also mirrored into
+  `lib/validation.ts`: allowed image/text MIME+extensions, `TEXT_FILE_MAX_BYTES`
+  100 KB, `MAX_UPLOAD_BYTES` 5 MB — the 320×240 resize itself stays
+  server-only, nothing to reject client-side for that). On selection: read as
+  a `data:` URL (`FileReader.readAsDataURL` — the backend accepts that prefix
+  directly, no need to strip it) and call `uploadAttachment` immediately,
+  before the comment form is submitted — matches the manual Sandbox testing
+  flow, not "stage then upload on submit".
+- `attachmentId` flows into `createComment`'s variables when set; cleared
+  (along with the file input) on successful submit or explicit removal.
+  Submit is disabled while the upload mutation is in flight **or** while
+  polling (see Step 2) is active — a comment can't be linked to an attachment
+  that hasn't finished processing.
+
+**Implemented — frontend, Step 2 (polling)**
+- New `attachment.graphql` operation. `CommentForm` only starts polling when
+  `uploadAttachment` comes back `type: IMAGE` and `processedAt: null` (never
+  for text). Uses Apollo's built-in `pollInterval` (1500 ms) on
+  `useQuery(AttachmentDocument, { skip: !pollingAttachmentId, fetchPolicy:
+  "network-only" })` rather than a hand-rolled `setInterval` loop — an effect
+  watching the polled result calls `stopPolling()` and swaps in the final
+  (resized) attachment once `processedAt` is non-null; a second effect holds a
+  15 s `setTimeout` that gives up, clears the attachment (so submit isn't
+  blocked), and shows "Could not process the attachment in time."
+- `Skeleton` for both phases: a thin bar while the upload mutation is in
+  flight, a larger block while polling ("Processing image…"). Once resolved:
+  `AttachmentPreview` (thumbnail or file link) + a Remove button.
+
+**Implemented — frontend, Step 3 (lightbox)**
+- `shared/ui/Lightbox` — dimmed overlay, image centered, portaled to
+  `document.body` (`createPortal`), closes on overlay click, Escape, or a
+  close button; locks background scroll while open. No gallery/next-prev —
+  one attachment per comment, nothing to navigate between, per the brief.
+- `components/AttachmentPreview` — the shared renderer for both the form's own
+  pending/done preview and an already-posted comment: a clickable thumbnail
+  opening `Lightbox` for images, a download link + filename for text (no
+  lightbox treatment needed there, per the brief). Attachment URLs are
+  root-relative (`/uploads/<id>.ext`, served by the *backend*) — new
+  `lib/attachmentUrl.ts` resolves them against the backend's origin (derived
+  from `NEXT_PUBLIC_GRAPHQL_URL`), not the frontend's own, or they'd 404
+  against Next's dev/prod server instead.
+- `commentThread.graphql`'s fragment now also selects `attachment { id type
+  url originalName size processedAt }` at every level; `CommentThreadNode`
+  renders it via `AttachmentPreview` between the comment text and the
+  reply/collapse actions.
+
+**Deviations from the plan (with reasons)**
+- The backend query's description explicitly says why it exists (pre-submit
+  polling on an unlinked attachment) rather than reading as a generic
+  "get attachment by id" — the kind of endpoint that's easy to misuse later
+  without that context.
+- Polling uses Apollo's native `pollInterval`/`stopPolling` instead of a
+  manual timer loop — less code, and it's a mechanism the client already
+  ships, built for exactly this purpose.
+- `AttachmentPreview` is one shared component for three call sites (form
+  pending state, form done state, thread display) rather than duplicating
+  thumbnail/link rendering — the previous session's `previewCommentHtml` reuse
+  (form preview ↔ thread text rendering) set the precedent.
+
+**Verified manually** (full `docker compose up -d --build` stack, live
+browser, `AttachmentsService.findById` unit + the 3 new e2e all independently
+confirming the query itself works before ever touching the UI): uploaded a
+150 KB `.txt` — **rejected client-side** with no network request at all
+(checked the browser's network log: 0 new GraphQL calls); uploaded a 640×480
+PNG — thumbnail resolved to the **actual resized 320×240 file on disk**
+(checked via the served bytes' IHDR chunk), and the network log showed
+`uploadAttachment` followed by **multiple** `attachment(id)` poll ticks before
+resolving, confirming real polling happened rather than a lucky first-response
+match; clicked the thumbnail in the form → lightbox opened, Escape closed it;
+submitted the comment → attachment appeared correctly in the root table's
+expanded thread, thumbnail click → lightbox again, confirmed working there
+too; replied to that comment with a `.txt` attachment → rendered as a
+`📄 filename` download link resolving to the backend's origin, correctly
+nested under the parent. Zero console errors/warnings throughout.
+
+**Pending — next session**:
+- The `commentCreated` WebSocket subscription for live updates.
+- Moderator login + hide/ban UI.
+- **Dedicated visual styling pass** (Reddit-like — compact threading, clearer
+  hierarchy, subtler collapse controls), still deliberately deferred, now
+  three sessions running (Steps 6-8 all stayed functional-only).
+- **Pagination self-check reminder — still open**: Prev/Next across a real
+  second page (26+ comments) has *still* only been verified structurally, not
+  against real multi-page data (three sessions running now). Same plan as
+  before: deliberately deferred to the pre-submission self-check pass when the
+  DB gets seeded for the demo video — don't let that pass skip it.

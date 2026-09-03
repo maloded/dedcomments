@@ -236,4 +236,38 @@ describe('AttachmentsService', () => {
 			expect(imageProcessing.resizeToFit).not.toHaveBeenCalled();
 		});
 	});
+
+	describe('findById', () => {
+		it('returns the attachment, linked or not', async () => {
+			prisma.attachment.findUnique.mockResolvedValue({
+				id: 'att-1',
+				type: AttachmentType.IMAGE,
+				url: '/uploads/att-1.png',
+				originalName: 'photo.png',
+				size: 123,
+				processedAt: null,
+			});
+
+			const result = await service.findById('att-1');
+
+			expect(prisma.attachment.findUnique).toHaveBeenCalledWith({
+				where: { id: 'att-1' },
+			});
+			expect(result).toEqual({
+				id: 'att-1',
+				type: AttachmentType.IMAGE,
+				url: '/uploads/att-1.png',
+				originalName: 'photo.png',
+				size: 123,
+				processedAt: null,
+			});
+		});
+
+		it('404s for an unknown id', async () => {
+			prisma.attachment.findUnique.mockResolvedValue(null);
+			await expect(service.findById('nope')).rejects.toThrow(
+				/was not found/,
+			);
+		});
+	});
 });

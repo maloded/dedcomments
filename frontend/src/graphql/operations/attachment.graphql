@@ -1,0 +1,10 @@
+query Attachment($id: ID!) {
+  attachment(id: $id) {
+    id
+    type
+    url
+    originalName
+    size
+    processedAt
+  }
+}
