@@ -770,3 +770,66 @@ in the dev Postgres from earlier ad-hoc/manual runs today, unrelated to this fix
 `deleteMany({})` cleared it and three consecutive full runs since have been clean.
 Pre-existing test-isolation gap, not touched by this change — worth a follow-up ticket
 if it recurs.
+
+---
+
+### Post-step-5 fix — full e2e isolation via consistent DB/cache truncation (done)
+
+Follow-up to the transient `moderation.e2e-spec.ts` failure noted above: audited every
+`.e2e-spec.ts` file for the same class of gap (a spec assuming a clean/specific starting
+DB state that isn't actually guaranteed).
+
+**Audit findings**: only `comments-read.e2e-spec.ts` truncated anything
+(`attachment`/`comment`/`author`, inline in its own `beforeAll`) — and even that missed
+`moderators` and the Redis `rootComments` cache. The other five specs (`app`,
+`attachments`, `comments`, `gateway`, `moderation`, `security`) did no cleanup at all,
+relying entirely on unique-per-run usernames (`Date.now()` suffixes) to avoid collisions
+— which sidesteps duplicate-row errors but does nothing about a **banned** identity, a
+stale cached `rootComments` page, or any other state some earlier run (a previous e2e
+run, a previous *failed* run, or manual GraphQL Sandbox testing) left behind. That's
+exactly what bit `moderation.e2e-spec.ts`'s `spammer` identity.
+
+**Fix**: every spec calls `createTestApp()` exactly once, in its own `beforeAll` — so
+that's the one choke point that can guarantee a clean slate without relying on each spec
+remembering to clean up, or on file-run order. `createTestApp()`
+(`test/create-test-app.ts`) now ends with a new `resetTestState(app)` step, run right
+after `app.init()`:
+- **Postgres**: one statement —
+  `TRUNCATE TABLE "comments", "authors", "attachments", "moderators" RESTART IDENTITY
+  CASCADE`. Naming every table in one `TRUNCATE` (with `CASCADE` as a safety net) sidesteps
+  the FK dependency graph entirely (`comments` self-references *and* FKs to
+  `authors`/`attachments`; `attachments` FKs back to `comments`) — no need to work out or
+  hand-maintain a deletion order.
+- **Redis**: `CacheService.delByPattern('rootComments:*')` — a manually-populated
+  `rootComments` cache entry uses the exact same key scheme
+  (`rootComments:{page}:{sortBy}:{sortOrder}`) an e2e run would, so it can leak stale
+  data into a test that never touched it otherwise.
+- `moderation.e2e-spec.ts` is unaffected: it `upsert`s its own `MOD_USER` row in its own
+  `beforeAll`, right after `createTestApp()` returns — truncating `moderators` first and
+  re-creating it second, in the same `beforeAll`, is exactly the sequence needed. No e2e
+  spec depends on the fixed `npm run seed:moderator` dev account (that's a manual/local
+  convenience only), so nothing needed to special-case preserving it.
+- Removed the now-redundant inline `deleteMany` calls from `comments-read.e2e-spec.ts`'s
+  `beforeAll` — consolidated onto the shared helper instead of keeping a second copy of
+  truncate logic.
+- `jest-e2e.json`'s `maxWorkers: 1` means spec files never race each other, so this only
+  ever has to protect against state left over from *before* the current file started,
+  not concurrent writers.
+
+**Verified — against actual pre-existing dirty state, not just repeated clean runs**:
+booted a standalone server (`node dist/main.js`), then through it: seeded the dev
+moderator, created a comment as `dirtyuser`, browsed `rootComments` (populating the
+Redis cache, as a human in the Sandbox would), created a second comment as `spammer`
+(the exact identity from the original bug), and banned both authors via `banAuthor`.
+Confirmed the dirty state landed (2 comments, 2 banned authors, a
+`rootComments:1:CREATED_AT:desc` Redis key, a `moderators` row) — then, with that state
+still in place and the standalone server stopped, ran `npm run test:e2e` immediately:
+**51/51 green**. Confirmed the DB was actually the reason (not luck): after the run,
+`dirtyuser`/`spammer` were gone from `authors`, `moderators` was empty, and the Redis
+`rootComments:*` keyspace was empty. Ran the full suite two more times back-to-back
+afterward — 51/51 both times, no flakiness. Re-seeded the dev moderator account
+afterward (`npm run seed:moderator`) purely as a courtesy, since running e2e truncates it
+— that account is dev-only and isn't depended on by anything.
+
+**Verified**: build / lint / **79 unit** (unchanged) / **51 e2e** green, three clean
+consecutive full-suite runs plus the dirty-state run above (4 total in a row, all green).

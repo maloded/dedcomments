@@ -3,7 +3,6 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import Redis from 'ioredis';
 import { createTestApp } from './create-test-app';
-import { PrismaService } from '../src/core/prisma/prisma.service';
 
 interface GqlError {
 	message: string;
@@ -61,7 +60,6 @@ const THREAD = `query ($rootId: ID!) {
 
 describe('rootComments + commentThread (e2e)', () => {
 	let app: INestApplication<App>;
-	let prisma: PrismaService;
 	let redis: Redis;
 
 	// ids captured while seeding
@@ -115,15 +113,12 @@ describe('rootComments + commentThread (e2e)', () => {
 	}
 
 	beforeAll(async () => {
+		// createTestApp() truncates every table + the rootComments Redis cache
+		// before returning — see create-test-app.ts's resetTestState — so the
+		// counts/ordering below are deterministic without this file also having
+		// to clean up after whatever ran before it.
 		app = await createTestApp();
-		prisma = app.get(PrismaService);
 		redis = new Redis(process.env.REDIS_URL as string);
-
-		// clean slate for deterministic counts/ordering
-		await prisma.attachment.deleteMany({});
-		await prisma.comment.deleteMany({});
-		await prisma.author.deleteMany({});
-		await flushRootCommentsCache();
 
 		// 4 roots, created oldest→newest: zeta, alpha, mike, TestUser1. TestUser1
 		// is mixed-case on purpose — it's the regression case for case-insensitive
