@@ -1,0 +1,5 @@
+mutation HideComment($commentId: ID!) {
+  hideComment(commentId: $commentId) {
+    id
+  }
+}

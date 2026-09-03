@@ -1325,3 +1325,157 @@ nested under the parent. Zero console errors/warnings throughout.
   against real multi-page data (three sessions running now). Same plan as
   before: deliberately deferred to the pre-submission self-check pass when the
   DB gets seeded for the demo video — don't let that pass skip it.
+
+---
+
+### Step 9 — WebSocket live updates, moderator login/hide/ban UI (done)
+
+**This closes the core functional scope.** Every endpoint and real-time
+feature from CLAUDE.md's "Core GraphQL endpoints" / WebSocket / JWT sections
+now has frontend UI. What's left is explicitly the deferred non-functional
+items (pagination self-check, the Reddit-style visual pass) plus deployment /
+README / demo video prep — see "Pending" below.
+
+**Implemented — WebSocket live updates**
+- `socket.io-client` (same major version, 4.8.3, as the backend's `socket.io`
+  — checked before installing). `components/RealtimeConnection` — headless,
+  mounted once in `Providers` — owns the one Socket.IO connection for the
+  app's lifetime (`getBackendOrigin()`, the same backend-origin helper
+  `attachmentUrl.ts` used, now factored out into `lib/backendOrigin.ts` so
+  both share it).
+- `lib/connectionStatus.tsx`: a small split read/write context (`'connecting'
+  | 'connected' | 'reconnecting' | 'disconnected'`), fed by the socket's
+  `connect`/`disconnect`/`connect_error` events and the underlying Manager's
+  `reconnect_attempt`/`reconnect` events (`socket.io.on(...)` — Socket.IO
+  reserves those on the Manager, not the Socket, confirmed against the
+  installed package's own `.d.ts` rather than assumed). `components/
+  ConnectionStatusIndicator` — a small dot + label reading it. Reconnection
+  itself stays entirely Socket.IO's own job (default backoff); this only ever
+  reflects state, never drives a retry, per the plan.
+- **Refetch, not a raw cache prepend**, for `commentCreated` — deliberately,
+  for two reasons documented inline in `RealtimeConnection.tsx`: (1)
+  `rootComments`/`commentThread` are sorted/paginated/tree-shaped, so a manual
+  cache splice would have to re-implement that placement logic client-side;
+  refetching just re-asks the server, which already has it right; (2) it
+  sidesteps the "don't double-count my own post" dedup problem *structurally*
+  rather than by adding dedup code — verified, not assumed: `lib/
+  apolloClient.ts` configures no custom `merge` function, so Apollo's
+  `InMemoryCache` default behavior is to *replace* an object-typed query
+  field wholesale on each fetch. `CommentForm`'s own post-submit
+  `refetchQueries` and this socket handler both firing for the same new
+  comment just means the field gets (correctly, non-duplicated) overwritten
+  twice — checked against the installed `@apollo/client` core types, not
+  taken on faith.
+- **A real bug found via the two-window manual test, not anticipated up
+  front**: the first cut only refetched `CommentThread` for a reply event.
+  Manually watching a second window while replying directly to a root in the
+  first showed the reply itself appearing live (correct) but the root row's
+  `repliesCount` in the table staying stale at the old count — that field
+  lives in `RootComments`, not `CommentThread`. Fixed by refetching
+  `RootComments` for *every* new comment, root or reply (mirrors what
+  `CommentForm`'s own `refetchQueries` already did for the poster's own
+  reply — this just extends the same reasoning to replies arriving from other
+  users over the socket). Re-verified after the fix: a direct reply now bumps
+  the table's count live in the other window; a *nested* reply (reply-to-a-
+  reply) correctly leaves the root's count untouched, matching
+  `repliesCount`'s documented "direct replies only" semantics.
+
+**Implemented — moderator login + hide/ban**
+- `lib/moderatorAuth.tsx`: a small context holding the JWT in plain React
+  state (not `sessionStorage`, though the brief allowed either) — the simpler
+  of the two allowed options, and a page reload logging the moderator out
+  costs nothing for a feature this secondary. Documented as a deliberate
+  choice, not an oversight.
+- `components/ModeratorPanel`: a small "Moderator" text link (not a
+  prominent nav item) that reveals a compact login form (plain controlled
+  inputs, not React Hook Form/Zod — two fields with no client-side validation
+  beyond "don't submit empty" didn't justify the extra machinery). Logged in:
+  "Moderator: {username}" + Log out.
+- `CommentThreadNode` grew Hide (in the actions row, next to Reply) and Ban
+  author (next to the username) buttons, visible only when
+  `useModeratorAuth().isLoggedIn` — covers both root and reply comments
+  through the one component, since a root's own text only ever renders there
+  too (Step 7). Both mutations pass the JWT via `context: { headers:
+  { Authorization: \`Bearer ${token}\` } }` on the individual `useMutation`
+  call, not a global Apollo auth link — simpler when only two mutations in
+  the whole app ever need it.
+- `hideComment` success: `refetchQueries: ["RootComments", "CommentThread"]`
+  — same by-name pattern as everywhere else; correctly handles both "hid a
+  root" (row disappears from the table entirely once refetched) and "hid a
+  reply" (vanishes from the tree, direct-parent's `repliesCount` decrements)
+  without the component needing to know which case it's in.
+- `banAuthor` success: no comments disappear (existing ones stay, per the
+  backend) — just a transient "Banned" label swapped in for the button.
+- Both actions check for a GraphQL `UNAUTHORIZED` code
+  (`CombinedGraphQLErrors`, same pattern as `CommentForm`'s error handling)
+  and call `logout()` + show "Your session expired — please log in again."
+  rather than failing silently — an expired/invalid JWT drops the session
+  instead of leaving the UI looking logged-in while every action quietly 401s.
+
+**Deviations from the plan (with reason) — one real, worth flagging clearly**
+- **Hiding/banning does *not* live-propagate to other connected browsers.**
+  The backend gateway (`modules/gateway`) only ever broadcasts
+  `commentCreated` — there is no `commentHidden`/`authorBanned` socket event
+  (confirmed by reading `comments.gateway.ts`; Step 5's progress log also only
+  documents `commentCreated`). Adding one would be a backend change beyond
+  what this frontend-only session was scoped to touch unprompted (the
+  precedent from Step 8: backend changes happen only when explicitly decided,
+  not assumed). So: the *moderator's own* window updates immediately (its own
+  mutation's `refetchQueries` fires locally); a second, unrelated window keeps
+  showing the hidden comment / unbanned author until it has its own reason to
+  refetch (reloading the page, or any other `RootComments`/`CommentThread`
+  refetch it happens to trigger). Verified precisely, not glossed over: hid a
+  comment in window A → gone there immediately; checked window B *without*
+  reloading → still showed it (confirming no live broadcast exists);
+  reloaded window B → gone there too (confirming the hide is genuinely
+  effective server-side, just not push-propagated). If live moderation
+  propagation across windows turns out to matter, the fix is a small backend
+  addition (broadcast on `hideComment`/`banAuthor` the same way
+  `createComment` already does) — flagging as a known gap, not fixing it here.
+- One unrelated small fix made while verifying: the moderator login
+  form's password input was missing `autoComplete="current-password"`
+  (`autoComplete="username"` on the username field too) — the browser's own
+  console flagged it during manual testing; fixed immediately since it was a
+  two-line, zero-risk change already staged in a file this step touched.
+
+**Verified manually** (full `docker compose up -d --build` stack, two real
+browser tabs — no reload between actions except where explicitly noted
+above): posted a root comment in tab 1 → appeared live in tab 0 (untouched,
+never reloaded) with the count ticking up; expanded a thread in tab 0,
+replied to it from tab 1 → the reply appeared live, correctly positioned
+(LIFO — newer above older sibling) in tab 0's already-open thread, no reload;
+replied to a nested reply (reply-to-a-reply) from tab 1 → appeared live at
+the correct depth in tab 0, and — as it should — did *not* change the root's
+`repliesCount` (only a *direct* reply does, per the bug found and fixed
+above, re-verified after the fix). Logged in with the seeded dev account
+(`moderator` / `moderator-dev-password` — CLAUDE.md → Step 5; had to reseed
+it, `npm run seed:moderator`, since e2e runs since Step 5 had truncated the
+`moderators` table). Hid a reply → gone from that window immediately,
+parent's `repliesCount` decremented; confirmed the *other* window needed a
+reload to reflect it (see Deviations). Banned an author, then tried posting
+again as that exact username + email → rejected with the backend's own
+"has been banned from commenting" message shown as a general form error, no
+comment created. Logged out → Hide/Ban buttons and the logged-in state
+disappeared immediately, back to the plain "Moderator" link. Zero console
+errors throughout (one browser-console *info* note about a missing
+`autocomplete` attribute, fixed — see Deviations).
+
+**Verified — build/lint**: `tsc --noEmit`, `next build`, `eslint` all clean
+(the one pre-existing informational React Compiler warning on `CommentForm`'s
+`watch()`, unrelated to this step, same as Steps 6-8).
+
+**Pending — next**:
+- **Dedicated visual styling pass** (Reddit-like), now four sessions
+  deliberately deferred (Steps 6-9 all stayed functional-only per each
+  session's explicit "styling scope" note).
+- **Pagination self-check** — still open, four sessions running: Prev/Next
+  across a real second page (26+ comments) has never been exercised against
+  real multi-page data. Same plan as every prior session: deliberately
+  deferred to the pre-submission self-check pass, when the DB gets seeded
+  with enough comments for the demo video anyway.
+- **Deployment, README, DB schema file for MySQL Workbench, demo video** —
+  everything in the brief's "Delivery format" section is still outstanding;
+  with this step done, the app is functionally complete enough that these
+  become the real next milestones rather than more feature work.
+- The known hide/ban-doesn't-live-broadcast gap noted above, if it ever
+  turns out to matter enough to justify the small backend addition.

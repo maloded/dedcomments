@@ -1,0 +1,9 @@
+mutation ModeratorLogin($input: ModeratorLoginInput!) {
+  moderatorLogin(input: $input) {
+    accessToken
+    moderator {
+      id
+      username
+    }
+  }
+}

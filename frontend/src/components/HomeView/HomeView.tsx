@@ -2,6 +2,8 @@
 
 import { CommentForm } from "@/components/CommentForm";
 import { RootCommentsTable } from "@/components/RootCommentsTable";
+import { ConnectionStatusIndicator } from "@/components/ConnectionStatusIndicator";
+import { ModeratorPanel } from "@/components/ModeratorPanel";
 import cls from "./HomeView.module.scss";
 
 /**
@@ -14,7 +16,13 @@ import cls from "./HomeView.module.scss";
 export function HomeView() {
   return (
     <div className="page">
-      <h1 className={cls.title}>Comments</h1>
+      <div className={cls.header}>
+        <h1 className={cls.title}>Comments</h1>
+        <div className={cls.headerRight}>
+          <ConnectionStatusIndicator />
+          <ModeratorPanel />
+        </div>
+      </div>
       <CommentForm className={cls.form} />
       <RootCommentsTable />
     </div>

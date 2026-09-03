@@ -1,6 +1,22 @@
+.header {
+  position: relative; // anchors ModeratorPanel's login card
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
 .title {
   font: var(--font-xl);
-  margin: 0 0 var(--space-5);
+  margin: 0;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding-top: var(--space-1);
 }
 
 .form {

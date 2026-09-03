@@ -3,6 +3,9 @@
 import { useState, type ReactNode } from "react";
 import { ApolloProvider } from "@apollo/client/react";
 import { createApolloClient } from "@/lib/apolloClient";
+import { ConnectionStatusProvider } from "@/lib/connectionStatus";
+import { ModeratorAuthProvider } from "@/lib/moderatorAuth";
+import { RealtimeConnection } from "@/components/RealtimeConnection";
 
 export function Providers({ children }: { children: ReactNode }) {
   // One client per mounted app, not per render — created lazily so it's never
@@ -11,5 +14,17 @@ export function Providers({ children }: { children: ReactNode }) {
   // form is the correct way to guard a one-time construction regardless).
   const [client] = useState(() => createApolloClient());
 
-  return <ApolloProvider client={client}>{children}</ApolloProvider>;
+  return (
+    <ApolloProvider client={client}>
+      <ConnectionStatusProvider>
+        <ModeratorAuthProvider>
+          {/* Headless — owns the Socket.IO connection, needs Apollo Client
+              (to refetch on commentCreated) and the status setter, both from
+              context above it, so it has to live inside both providers. */}
+          <RealtimeConnection />
+          {children}
+        </ModeratorAuthProvider>
+      </ConnectionStatusProvider>
+    </ApolloProvider>
+  );
 }

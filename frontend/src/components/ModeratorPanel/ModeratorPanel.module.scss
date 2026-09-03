@@ -1,0 +1,55 @@
+.toggleLink {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-text-muted);
+  font: var(--font-xs);
+  text-decoration: underline;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-accent);
+  }
+}
+
+.ModeratorPanel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.loggedInAs {
+  font: var(--font-xs);
+  color: var(--color-text-muted);
+}
+
+.loginCard {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: var(--z-dropdown);
+  width: 220px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.input {
+  font: var(--font-sm);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.formActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.error {
+  font: var(--font-xs);
+  color: var(--color-danger);
+}

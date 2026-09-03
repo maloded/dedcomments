@@ -77,6 +77,17 @@
   color: var(--color-text-muted);
 }
 
+.banStatus {
+  font: var(--font-xs);
+  color: var(--color-danger);
+  margin-left: auto;
+}
+
+.moderationError {
+  font: var(--font-xs);
+  color: var(--color-danger);
+}
+
 .text {
   white-space: pre-wrap;
   word-break: break-word;
