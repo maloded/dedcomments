@@ -1,0 +1,54 @@
+fragment CommentThreadFields on ThreadCommentModel {
+  id
+  text
+  parentId
+  createdAt
+  repliesCount
+  author {
+    id
+    username
+    email
+  }
+}
+
+# GraphQL has no recursive-fragment construct (a fragment can't spread itself),
+# so an arbitrary-depth tree has to be selected out to a fixed depth by hand.
+# 10 levels is generous headroom over the UI's own depth cap (6, 3-4 on mobile —
+# see CommentThreadNode.module.scss): replies past level 10 just wouldn't be
+# fetched. Fine for this brief's realistic thread depths; documented as a known
+# limit, not silently lossy.
+query CommentThread($rootId: ID!) {
+  commentThread(rootId: $rootId) {
+    ...CommentThreadFields
+    replies {
+      ...CommentThreadFields
+      replies {
+        ...CommentThreadFields
+        replies {
+          ...CommentThreadFields
+          replies {
+            ...CommentThreadFields
+            replies {
+              ...CommentThreadFields
+              replies {
+                ...CommentThreadFields
+                replies {
+                  ...CommentThreadFields
+                  replies {
+                    ...CommentThreadFields
+                    replies {
+                      ...CommentThreadFields
+                      replies {
+                        ...CommentThreadFields
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

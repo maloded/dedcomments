@@ -1,0 +1,107 @@
+@use "../../styles/tokens";
+
+// Deliberately minimal this pass (CLAUDE.md → this step's "styling scope" note):
+// just enough spacing/borders to make the tree readable and testable. A dedicated
+// visual pass (Reddit-like compact threading) is tracked as pending.
+
+.CommentThread {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.error {
+  color: var(--color-danger);
+  margin: 0;
+  padding: var(--space-4);
+}
+
+.CommentThreadNode {
+  // `--depth` is set inline per node (see CommentThreadNode.tsx); capped at 6
+  // here too as a second line of defense, and reduced further + tightened on
+  // mobile below.
+  margin-left: calc(min(var(--depth), 6) * var(--space-3));
+
+  @media (max-width: tokens.$breakpoint-mobile) {
+    margin-left: calc(min(var(--depth), 4) * var(--space-2));
+  }
+
+  // The "thread line" — every level but the root gets a left border instead of
+  // relying on margin alone for deep threads, per CLAUDE.md → "Tree rendering
+  // on the frontend".
+  &:not(.root) {
+    border-left: 2px solid var(--color-border);
+    padding-left: var(--space-3);
+
+    @media (max-width: tokens.$breakpoint-mobile) {
+      padding-left: var(--space-2);
+    }
+  }
+
+  & + & {
+    margin-top: var(--space-3);
+  }
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--font-sm);
+}
+
+.collapseToggle {
+  min-width: 28px;
+  justify-content: center;
+}
+
+.username {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.date {
+  color: var(--color-text-muted);
+}
+
+.text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+
+  :global(code) {
+    background: var(--color-code-bg);
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-1);
+    font-family: var(--font-family-mono);
+  }
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.replyForm {
+  margin-top: var(--space-2);
+}
+
+.replies {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}

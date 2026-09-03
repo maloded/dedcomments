@@ -41,9 +41,18 @@
     border-bottom: none;
   }
 
-  tbody tr:hover {
+  tbody tr:not(.threadRow):hover {
     background: var(--color-surface-muted);
   }
+}
+
+.threadRow {
+  background: var(--color-bg);
+}
+
+.threadCell {
+  padding: 0;
+  white-space: normal;
 }
 
 .sortButton {

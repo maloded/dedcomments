@@ -187,9 +187,16 @@ export function CommentForm(props: CommentFormProps) {
             ...(parentId ? { parentId } : {}),
           },
         },
-        // Keeps the root table's list + counts in sync without any prop
-        // wiring between this component and RootCommentsTable.
-        refetchQueries: ["RootComments"],
+        // Keeps the root table's list + counts in sync without any prop wiring
+        // to RootCommentsTable. For a reply, also refetch the open thread — by
+        // *name*, not a specific rootId: Apollo refetches every currently
+        // active `CommentThread` watcher using its own variables, and since a
+        // reply's Reply button only exists inside an already-expanded thread,
+        // there's exactly one such watcher (the one being replied in). Naming
+        // it unconditionally would be a harmless no-op when nothing's expanded
+        // (Apollo just skips it), but scoping it to replies keeps the intent
+        // — "a reply invalidates its own thread" — obvious at the call site.
+        refetchQueries: parentId ? ["RootComments", "CommentThread"] : ["RootComments"],
       });
 
       reset(DEFAULT_VALUES);

@@ -1084,3 +1084,122 @@ attachment upload + lightbox (with polling for `processedAt` while the RabbitMQ
 consumer resizes an image — the `Skeleton` component is already in place for
 this), the `commentCreated` WebSocket subscription for live updates, and moderator
 login + hide/ban UI.
+
+---
+
+### Step 7 — recursive comment thread view, inline reply (done)
+
+Structure/functionality only this pass, deliberately — see the "styling scope"
+note carried into the wrap-up below. A dedicated visual pass (Reddit-like compact
+threading) is explicitly deferred, not forgotten; tracked in this entry's
+"Pending" list.
+
+**Implemented — `commentThread` query + tree**
+- `src/graphql/operations/commentThread.graphql`: a `CommentThreadFields`
+  fragment + the query, nested 10 `replies` levels deep by hand. GraphQL has no
+  recursive-fragment construct (a fragment can't spread itself), so an
+  arbitrary-depth tree has to be selected out to a fixed depth — 10 is generous
+  headroom over the UI's own 6-level visual cap (3-4 on mobile), documented
+  inline as a known, deliberate limit rather than a silent one.
+- `components/CommentThread/` — two components sharing one module:
+  - `CommentThread.tsx`: owns `useQuery(CommentThreadDocument, { variables:
+    { rootId } })`, `Skeleton` while loading, an error banner, renders the root
+    via `CommentThreadNode`.
+  - `CommentThreadNode.tsx`: the recursive renderer — author, date, sanitized
+    text, a `Reply` button, and (if any) a `replies` block mapping itself over
+    each child. Replies render in the order the backend already returns them
+    (LIFO per level) — no client-side re-sort. Text rendering reuses
+    `previewCommentHtml` (the form's live-preview sanitizer) rather than a
+    second helper — same allowlist logic is correct for read-only display too,
+    and it's already proven safe.
+  - Indentation: `--depth` (capped at 6 in JS) set as an inline custom property
+    per node — same per-instance-value pattern as `Skeleton`'s inline
+    `width`/`height` — consumed in SCSS as `calc(min(var(--depth), 6) *
+    var(--space-3))`, with a `@media (max-width: tokens.$breakpoint-mobile)`
+    override dropping the cap to 4 and the per-level unit to `--space-2`. First
+    real consumer of `$breakpoint-mobile`, sitting unused since Step 6.
+  - Thread line: every non-root node gets `border-left` + `padding-left`
+    instead of relying on margin alone at depth.
+  - Subtree collapse is a local `useState<boolean>` — no re-fetch, the data's
+    already in hand. Collapsing hides the `replies` block only, not the node's
+    own author/date/text — a comment stays legible when its subtree is
+    collapsed; only the replies underneath disappear (see Deviations below).
+- **`RootCommentsTable`**: the "Expand" button is real now. `expandedIds:
+  Set<string>` tracks which rows have their thread open; toggling adds/removes
+  the id and mounts/unmounts an extra `<tr><td colSpan={5}><CommentThread
+  rootId /></td></tr>` right after the row. Unmounting on collapse and
+  remounting on re-expand costs nothing over the network for the same
+  `rootId` — Apollo's default `cache-first` fetch policy serves the remount
+  from cache (confirmed manually, see below).
+
+**Implemented — inline reply**
+- `CommentThreadNode` toggles an inline `<CommentForm parentId={node.id}
+  onSuccess={...} />` per node (one at a time per node, but nothing stops two
+  different nodes from having their reply form open simultaneously — simplest
+  thing that works, not restricted further).
+- `CommentForm`'s `onSubmit` now passes `refetchQueries: parentId ?
+  ["RootComments", "CommentThread"] : ["RootComments"]`. Naming `"CommentThread"`
+  by operation name (not a specific `rootId`) is sufficient: Apollo refetches
+  every currently *active* watcher of that query using **its own** variables,
+  and a reply's `Reply` button only exists inside an already-expanded thread —
+  so there's exactly one active `CommentThread` watcher, the one being replied
+  in. No ref/callback wiring needed between `CommentForm` and `CommentThread`.
+  `onSuccess` also collapses the reply form itself.
+
+**Deviations from the plan (with reasons)**
+- **The root's own text renders when its row is expanded**, not just its
+  replies. The root table has no "text" column at all (username/email/date/
+  replies only), so this is the only place a reader ever sees a root comment's
+  actual text — treating depth-0 as "just another node in the tree" instead of
+  skipping straight to `replies` was a deliberate reading, not an oversight.
+- **Collapse semantics were corrected mid-session.** First draft hid the
+  collapsed node's own text/actions along with its replies — indistinguishable
+  from the comment vanishing. Fixed to the conventional behavior (collapse a
+  *subtree*, not the comment): text/actions always render, only the nested
+  `replies` block is conditional on `collapsed`.
+- **The task's assumption of a pre-existing 3-level thread from earlier manual
+  testing didn't hold** — checked the actual DB (`select ... from comments`)
+  before starting and found only root-level comments (the Step 6 session's
+  `alice`/`Zed`/`amy`, no `parentId` set on any of them); whatever nested test
+  data existed earlier didn't survive the intervening e2e-isolation work's
+  repeated truncation. Built a fresh 3-level thread through the running app
+  instead (see Verified below) — which doubled as the actual reply-flow test.
+
+**Verified manually** (full `docker compose up -d --build` stack, live browser):
+expanded a 0-reply root (`alice` / "hello") — its own text rendered inline, no
+crash on an empty `replies` array; replied to it as `bob`, confirmed the row's
+`repliesCount` bumped to 1 *and* the open thread refetched to show `bob` nested
+under `alice` without a page reload; replied to `bob` as `carol` — 3 levels deep,
+correctly nested, thread-line borders visibly growing per level (screenshot);
+replied to `alice` again as `dave` and confirmed `dave` (newer) rendered *above*
+`bob` (older) as siblings — LIFO, un-re-sorted, exactly as the backend returns
+it. Collapsed `bob`'s subtree — `bob`'s own text stayed visible, `carol`
+disappeared, **network request count unchanged** (checked via the browser's
+network log before/after). Collapsed and re-expanded the whole row via the
+table's Expand/Collapse button — **network request count unchanged** on
+re-expand too, confirming Apollo's cache serves the remount. Resized to a
+375px mobile viewport — indentation visibly tightens (screenshot), thread
+still readable, no layout break. Zero console errors/warnings throughout.
+
+**Verified — build/lint**: `tsc --noEmit`, `next build`, `eslint` all clean (one
+pre-existing informational React Compiler warning on `CommentForm`'s `watch()`,
+unrelated to this step, same as Step 6).
+
+**Pending — next session**:
+- Attachment upload + lightbox, with polling for `processedAt` while the
+  RabbitMQ consumer resizes an image (`Skeleton` already in place for this).
+- The `commentCreated` WebSocket subscription for live updates.
+- Moderator login + hide/ban UI.
+- **A dedicated visual styling pass** — this step and Step 6 both stayed
+  deliberately minimal/functional (existing tokens, basic spacing/borders).
+  The aimed-for look is Reddit-like: compact threading, clearer visual
+  hierarchy, subtler collapse controls than the current text-label toggle —
+  restyling the existing DOM/component structure, not rebuilding it.
+- **Pagination self-check reminder, explicitly tracked (not just mentioned in
+  passing) per this session's instructions**: Prev/Next across a real second
+  page (26+ comments) has still only been verified structurally (`page >=
+  totalPages`-style logic read, not exercised against real multi-page data,
+  now in two sessions running). Deliberately deferred to the pre-submission
+  self-check pass, when the DB gets seeded with enough comments for the demo
+  video anyway — don't let that pass skip actually clicking Next once real
+  paginated data exists.

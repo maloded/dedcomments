@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@apollo/client/react";
 import {
   RootCommentsDocument,
@@ -11,6 +11,7 @@ import {
 import { classNames } from "@/shared/lib/classNames";
 import { Skeleton } from "@/shared/ui/Skeleton";
 import { Button } from "@/shared/ui/Button";
+import { CommentThread } from "@/components/CommentThread";
 import cls from "./RootCommentsTable.module.scss";
 
 const SORTABLE_COLUMNS: { field: RootCommentSortField; label: string }[] = [
@@ -39,6 +40,22 @@ export function RootCommentsTable() {
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState<RootCommentSortField>("CREATED_AT");
   const [sortOrder, setSortOrder] = useState<SortOrder>("DESC");
+  // Which root rows currently have their thread expanded. A row's <CommentThread>
+  // unmounts on collapse and remounts on re-expand — Apollo's default cache-first
+  // policy means that costs nothing extra over the network for the same rootId.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const { data, loading, error } = useQuery(RootCommentsDocument, {
     variables: { page, sortBy, sortOrder },
@@ -123,24 +140,36 @@ export function RootCommentsTable() {
             )}
 
             {!loading &&
-              items.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.author.username}</td>
-                  <td>{item.author.email}</td>
-                  <td>{formatDate(item.createdAt)}</td>
-                  <td>{item.repliesCount}</td>
-                  <td>
-                    <Button
-                      size="sm"
-                      variant="clear"
-                      disabled
-                      title="Thread view is coming in the next session"
-                    >
-                      Expand
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+              items.map((item) => {
+                const expanded = expandedIds.has(item.id);
+                return (
+                  <Fragment key={item.id}>
+                    <tr>
+                      <td>{item.author.username}</td>
+                      <td>{item.author.email}</td>
+                      <td>{formatDate(item.createdAt)}</td>
+                      <td>{item.repliesCount}</td>
+                      <td>
+                        <Button
+                          size="sm"
+                          variant="clear"
+                          aria-expanded={expanded}
+                          onClick={() => toggleExpanded(item.id)}
+                        >
+                          {expanded ? "Collapse" : "Expand"}
+                        </Button>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className={cls.threadRow}>
+                        <td colSpan={5} className={cls.threadCell}>
+                          <CommentThread rootId={item.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
           </tbody>
         </table>
       </div>
