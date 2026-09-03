@@ -654,3 +654,58 @@ a live socket client receives `commentCreated` on `createComment`; rapid `create
 **Pending — frontend** (separate session): form + live preview + tag toolbar + CAPTCHA,
 root table (sort/paginate), recursive tree with "Expand", lightbox attachments,
 `commentCreated` socket subscription, moderator login + hide/ban UI.
+
+---
+
+### Post-step-5 bug fix — `GqlThrottlerGuard` breaking the RabbitMQ consumer (done)
+
+Found via manual GraphQL Sandbox testing (uploading an image with the dev server running
+normally, i.e. `THROTTLE_DISABLED` unset) — not caught by the existing test suite, because
+every e2e spec runs with `THROTTLE_DISABLED=true`, which short-circuits the throttler via
+`skipIf` before it ever touches a request context, masking the bug.
+
+**Root cause**: `GqlThrottlerGuard` is registered globally (`APP_GUARD` in `CoreModule`), so
+Nest runs it in front of *every* handler behind a guard — including the RabbitMQ
+`AttachmentsConsumer`'s `@EventPattern('attachment.resize')` handler, which is an RPC
+execution context, not GraphQL. Its `getRequestResponse` unconditionally did
+`GqlExecutionContext.create(context).getContext().req` — `undefined` in an RPC context — so
+every attempt to process a resize job threw `TypeError: Cannot read properties of undefined
+(reading 'req')` before reaching the resize logic. The message was never ack'd or nack'd, so
+it sat in RabbitMQ's Unacked state forever (`Ready 0, Unacked 1` in the management UI).
+
+**Fix**: `GqlThrottlerGuard` now overrides `shouldSkip` (the base `ThrottlerGuard`'s
+first check in `canActivate`, run *before* `getRequestResponse`) to skip — i.e. let the
+request through unthrottled — for any execution context whose `getType()` isn't
+`'graphql'`. RPC/microservice contexts (and any future non-GraphQL context) now bypass the
+guard entirely instead of reaching the GraphQL-only `getRequestResponse` path. Rate limiting
+was only ever meant to cover `createComment`/`moderatorLogin` (both GraphQL mutations), so
+this doesn't change intended behaviour, just stops it from misfiring where it was never meant
+to apply.
+
+**Regression test**: `attachments.e2e-spec.ts` gained a
+`resize queue survives the global throttler guard (regression)` block, modeled on
+`security.e2e-spec.ts`'s pattern of deleting `THROTTLE_DISABLED` for one describe block —
+it drives a real image through `uploadAttachment` → the real RabbitMQ consumer with
+throttling actually enabled, and asserts `processedAt` gets set and the image is resized to
+320×240. This is the scenario the existing suite's `THROTTLE_DISABLED=true` default was
+silently skipping.
+
+**Audit of other global providers** (`APP_GUARD`/`APP_INTERCEPTOR`/`APP_FILTER` in
+`core.module.ts`) for the same class of bug:
+- `JwtAuthGuard` — applied per-resolver via `@UseGuards`, never global; not at risk.
+- `GraphqlExceptionFilter` (`APP_FILTER`, `@Catch()`) — also GraphQL-labelled, but
+  `GqlArgumentsHost.getInfo()` on an RPC context's 2-arg `getArgs()` just returns
+  `undefined` (`fieldName` defaults to `'?'`) rather than throwing, so it degrades safely
+  instead of crashing. Not currently reached in practice either, since the consumer catches
+  its own errors and never lets one escape to a global filter. Left as-is; flagged as
+  something to narrow (e.g. `@Catch()` → GraphQL-only) if it ever grows real RPC-specific
+  behaviour.
+- No other `APP_GUARD`/`APP_INTERCEPTOR`/`APP_FILTER` providers exist.
+
+**Verified**: build / lint / **78 unit** / **51 e2e** green (unit count unchanged; e2e +1
+for the regression test). Manual: RabbitMQ management UI showed `Ready 0, Unacked 0` on
+`attachment.resize` before this fix was tested (no message was actually stuck at fix time —
+confirmed instead by re-running the exact repro: `uploadAttachment` a 640×480 PNG with
+`THROTTLE_DISABLED` unset against a fresh server instance) — the consumer log showed the
+`resize:` success line (no `TypeError`), the file on disk was resized to 320×240, and
+`processedAt` was stamped in Postgres; the queue stayed at `Ready 0, Unacked 0` throughout.

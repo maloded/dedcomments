@@ -287,4 +287,40 @@ describe('uploadAttachment + resize queue (e2e)', () => {
 		});
 		expect(res.errors?.[0].extensions?.code).toBe('NOT_FOUND');
 	});
+
+	// Regression: `GqlThrottlerGuard` is registered globally (`APP_GUARD` in
+	// CoreModule), so Nest runs it in front of the RabbitMQ consumer's
+	// `@EventPattern` handler too, not just GraphQL resolvers. The global test
+	// setup sets THROTTLE_DISABLED=true, which short-circuited the throttler
+	// via `skipIf` *before* it ever touched the (GraphQL-only) request context —
+	// masking a `TypeError: Cannot read properties of undefined (reading
+	// 'req')` that only fired with throttling actually enabled. That crash left
+	// every `attachment.resize` job un-ack'd and stuck in RabbitMQ forever, so
+	// this block re-enables throttling the way `security.e2e-spec.ts` does and
+	// drives a real upload through the real consumer to prove the guard no
+	// longer touches non-GraphQL (RPC) contexts.
+	describe('resize queue survives the global throttler guard (regression)', () => {
+		beforeAll(() => {
+			delete process.env.THROTTLE_DISABLED; // re-enable for this block
+		});
+		afterAll(() => {
+			process.env.THROTTLE_DISABLED = 'true';
+		});
+
+		it('resizes an image even with the global rate limiter active', async () => {
+			const res = await upload(
+				'throttled.png',
+				'image/png',
+				await solidPng(640, 480),
+			);
+			const att = res.data!.uploadAttachment!;
+			expect(att.processedAt).toBeNull();
+
+			const processedAt = await waitProcessed(att.id);
+			expect(processedAt).toBeInstanceOf(Date);
+
+			const dims = await diskDimensions(att.url);
+			expect(dims).toEqual({ width: 320, height: 240 });
+		});
+	});
 });
