@@ -125,7 +125,10 @@ describe('rootComments + commentThread (e2e)', () => {
 		await prisma.author.deleteMany({});
 		await flushRootCommentsCache();
 
-		// 3 roots, created oldest→newest: zeta, alpha, mike
+		// 4 roots, created oldest→newest: zeta, alpha, mike, TestUser1. TestUser1
+		// is mixed-case on purpose — it's the regression case for case-insensitive
+		// USERNAME/EMAIL sorting (Postgres's default collation would otherwise put
+		// every uppercase-leading name before every lowercase one).
 		roots.zeta = await seedComment({
 			username: 'zeta',
 			text: 'root by zeta',
@@ -139,6 +142,11 @@ describe('rootComments + commentThread (e2e)', () => {
 		roots.mike = await seedComment({
 			username: 'mike',
 			text: 'root by mike',
+		});
+		await wait(10);
+		roots.testUser1 = await seedComment({
+			username: 'TestUser1',
+			text: 'root by TestUser1',
 		});
 
 		// alpha's thread: 2 direct replies + one nested 2 levels deeper (=> 4 levels total)
@@ -179,10 +187,11 @@ describe('rootComments + commentThread (e2e)', () => {
 		const body = await gql<RootCommentsData>({ query: ROOT_COMMENTS });
 		const page = body.data!.rootComments;
 
-		expect(page.totalCount).toBe(3);
+		expect(page.totalCount).toBe(4);
 		expect(page.page).toBe(1);
 		expect(page.totalPages).toBe(1);
 		expect(page.items.map(i => i.author.username)).toEqual([
+			'TestUser1',
 			'mike',
 			'alpha',
 			'zeta',
@@ -191,14 +200,16 @@ describe('rootComments + commentThread (e2e)', () => {
 		expect(alpha.repliesCount).toBe(2); // direct replies only
 	});
 
-	it('sorts by USERNAME ascending and descending', async () => {
+	it('sorts by USERNAME ascending and descending, case-insensitively', async () => {
 		const asc = await gql<RootCommentsData>({
 			query: ROOT_COMMENTS,
 			variables: { sortBy: 'USERNAME', sortOrder: 'ASC' },
 		});
+		// Not ['TestUser1', 'alpha', 'mike', 'zeta'] — that would be Postgres's
+		// default (case-sensitive) collation putting the capitalized name first.
 		expect(
 			asc.data!.rootComments.items.map(i => i.author.username),
-		).toEqual(['alpha', 'mike', 'zeta']);
+		).toEqual(['alpha', 'mike', 'TestUser1', 'zeta']);
 
 		const desc = await gql<RootCommentsData>({
 			query: ROOT_COMMENTS,
@@ -206,10 +217,10 @@ describe('rootComments + commentThread (e2e)', () => {
 		});
 		expect(
 			desc.data!.rootComments.items.map(i => i.author.username),
-		).toEqual(['zeta', 'mike', 'alpha']);
+		).toEqual(['zeta', 'TestUser1', 'mike', 'alpha']);
 	});
 
-	it('sorts by EMAIL ascending', async () => {
+	it('sorts by EMAIL ascending, case-insensitively', async () => {
 		const body = await gql<RootCommentsData>({
 			query: ROOT_COMMENTS,
 			variables: { sortBy: 'EMAIL', sortOrder: 'ASC' },
@@ -217,6 +228,7 @@ describe('rootComments + commentThread (e2e)', () => {
 		expect(body.data!.rootComments.items.map(i => i.author.email)).toEqual([
 			'alpha@example.com',
 			'mike@example.com',
+			'TestUser1@example.com',
 			'zeta@example.com',
 		]);
 	});
@@ -244,7 +256,7 @@ describe('rootComments + commentThread (e2e)', () => {
 		expect(await redis.exists(key)).toBe(0); // busted
 
 		const after = await gql<RootCommentsData>({ query: ROOT_COMMENTS });
-		expect(after.data!.rootComments.totalCount).toBe(4);
+		expect(after.data!.rootComments.totalCount).toBe(5);
 		expect(after.data!.rootComments.items[0].author.username).toBe(
 			'newbie',
 		);

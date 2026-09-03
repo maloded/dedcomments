@@ -263,22 +263,22 @@ describe('CommentsService', () => {
 			[
 				RootCommentSortField.USERNAME,
 				SortOrder.ASC,
-				{ author: { username: 'asc' } },
+				{ author: { usernameLower: 'asc' } },
 			],
 			[
 				RootCommentSortField.USERNAME,
 				SortOrder.DESC,
-				{ author: { username: 'desc' } },
+				{ author: { usernameLower: 'desc' } },
 			],
 			[
 				RootCommentSortField.EMAIL,
 				SortOrder.ASC,
-				{ author: { email: 'asc' } },
+				{ author: { emailLower: 'asc' } },
 			],
 			[
 				RootCommentSortField.EMAIL,
 				SortOrder.DESC,
-				{ author: { email: 'desc' } },
+				{ author: { emailLower: 'desc' } },
 			],
 			[
 				RootCommentSortField.CREATED_AT,
@@ -290,13 +290,16 @@ describe('CommentsService', () => {
 				SortOrder.DESC,
 				{ createdAt: 'desc' },
 			],
-		])('sorts by %s %s', async (sortBy, sortOrder, expected) => {
-			await service.getRootComments(args({ sortBy, sortOrder }));
-			const [findArg] = prisma.comment.findMany.mock.calls.at(0) as [
-				{ orderBy: unknown },
-			];
-			expect(findArg.orderBy).toEqual(expected);
-		});
+		])(
+			'sorts by %s %s using the case-insensitive lowercase mirror column',
+			async (sortBy, sortOrder, expected) => {
+				await service.getRootComments(args({ sortBy, sortOrder }));
+				const [findArg] = prisma.comment.findMany.mock.calls.at(0) as [
+					{ orderBy: unknown },
+				];
+				expect(findArg.orderBy).toEqual(expected);
+			},
+		);
 
 		it('paginates: page 3 skips 50', async () => {
 			await service.getRootComments(args({ page: 3 }));

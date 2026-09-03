@@ -263,6 +263,36 @@ The comment-body sanitizer is the primary XSS defence. Design decisions:
   `1' OR '1'='1`, `'; DROP TABLE …`, `UNION SELECT`, `pg_sleep(5)` — all return a clean
   `NOT_FOUND`, tables intact.
 
+## Case-insensitive sorting
+
+- `rootComments(sortBy: USERNAME | EMAIL)` must sort case-insensitively (users expect
+  "alpha", "TestUser1", "zeta", not Postgres's default collation putting every
+  uppercase-leading string before every lowercase one).
+- **Prisma's `orderBy` has no `mode: 'insensitive'`.** That option only exists on
+  `where` filter types (`StringFilter`/`StringNullableFilter`) — check the generated
+  `AuthorOrderByWithRelationInput` in `.prisma/client/index.d.ts` before assuming
+  otherwise, it changes across major versions. On `orderBy`, `username`/`email` are
+  typed as plain `SortOrder` (`'asc' | 'desc'`), not an object that accepts `mode`. This
+  was re-verified against the pinned Prisma 6.19.3 client for this project.
+- **Chosen fix: app-maintained lowercase mirror columns**, not a Postgres
+  `GENERATED ALWAYS AS (...) STORED` column. `Author.usernameLower`/`emailLower` are
+  ordinary Prisma `String` fields, set once in `AuthorsService.findOrCreate` — the
+  **only** place `username`/`email` are ever written (an identity's username/email never
+  change after its `Author` row is created — `@@unique([username, email])` makes that
+  pair the identity). `rootComments`'s `orderBy` sorts on these instead of
+  `username`/`email` directly.
+  - A real Postgres generated column would guarantee sync at the DB level instead of by
+    convention, but Prisma has no schema syntax for `GENERATED ALWAYS AS` — it would mean
+    hand-written DDL in every future migration touching that table (`prisma migrate dev`
+    can't diff a column it doesn't know is generated) for a single-write-path table. Not
+    worth it here; revisit if a second `Author`-creating path ever appears.
+  - Fully injection-safe by construction: no raw SQL, no string concatenation — just a
+    normal Prisma field written from `.toLowerCase()` and sorted on via `orderBy`.
+- Migration `20260903122801_author_lowercase_sort_columns` adds both columns nullable,
+  backfills existing rows with `UPDATE ... SET x = lower(y)`, then sets `NOT NULL` — the
+  three-step shape needed because the table already had rows and neither column has a
+  meaningful constant default.
+
 ## Redis caching
 
 - `CacheService` (`modules/cache`, `@Global`) wraps one `ioredis` connection:

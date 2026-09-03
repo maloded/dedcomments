@@ -50,6 +50,21 @@ describe('AuthorsService', () => {
 			expect(arg.create.homepage).toBe('https://bob.dev'); // trimmed
 		});
 
+		it('lowercases username/email into usernameLower/emailLower on create, for case-insensitive sorting', async () => {
+			prisma.author.findUnique.mockResolvedValue(null);
+
+			await service.findOrCreate({
+				username: 'TestUser1',
+				email: 'TestUser1@Example.COM',
+			});
+
+			const [arg] = prisma.author.upsert.mock.calls.at(0) as [
+				{ create: { usernameLower: string; emailLower: string } },
+			];
+			expect(arg.create.usernameLower).toBe('testuser1');
+			expect(arg.create.emailLower).toBe('testuser1@example.com');
+		});
+
 		it('rejects a banned identity before any write', async () => {
 			prisma.author.findUnique.mockResolvedValue({ isBanned: true });
 

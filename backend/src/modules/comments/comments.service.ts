@@ -343,15 +343,21 @@ export class CommentsService {
 		};
 	}
 
+	/**
+	 * Sorts by `usernameLower`/`emailLower`, not `username`/`email` — Prisma's
+	 * `orderBy` has no `mode: 'insensitive'` (unlike `where`), so without this
+	 * Postgres's default collation would sort "TestUser1" before "alpha". See
+	 * code-style-reference.md → "Case-insensitive sorting".
+	 */
 	private static buildRootOrderBy(
 		sortBy: RootCommentSortField,
 		sortOrder: SortOrder,
 	): Prisma.CommentOrderByWithRelationInput {
 		switch (sortBy) {
 			case RootCommentSortField.USERNAME:
-				return { author: { username: sortOrder } };
+				return { author: { usernameLower: sortOrder } };
 			case RootCommentSortField.EMAIL:
-				return { author: { email: sortOrder } };
+				return { author: { emailLower: sortOrder } };
 			case RootCommentSortField.CREATED_AT:
 			default:
 				return { createdAt: sortOrder };

@@ -709,3 +709,64 @@ confirmed instead by re-running the exact repro: `uploadAttachment` a 640×480 P
 `THROTTLE_DISABLED` unset against a fresh server instance) — the consumer log showed the
 `resize:` success line (no `TypeError`), the file on disk was resized to 320×240, and
 `processedAt` was stamped in Postgres; the queue stayed at `Ready 0, Unacked 0` throughout.
+
+---
+
+### Post-step-5 bug fix — case-insensitive `rootComments` sorting (done)
+
+Found during manual testing: `rootComments(sortBy: USERNAME | EMAIL)` sorted by
+Postgres's default (case-sensitive) collation, so e.g. `"TestUser1"` sorted before
+`"alpha"` — every uppercase-leading string before every lowercase one — instead of the
+expected alphabetical order (`"alpha"`, `"TestUser1"`, `"zeta"`).
+
+**Investigated**: Prisma's `orderBy` has no `mode: 'insensitive'` — that option only
+exists on `where` filter types (`StringFilter`/`StringNullableFilter`); the generated
+`AuthorOrderByWithRelationInput` types `username`/`email` as plain `SortOrder`
+(`'asc' | 'desc'`), confirmed against the pinned Prisma 6.19.3 client. So the
+Prisma-native `orderBy` route the ticket suggested checking first isn't available.
+
+**Fix chosen: app-maintained lowercase mirror columns**, not a Postgres
+`GENERATED ALWAYS AS (...) STORED` column:
+- `Author.usernameLower` / `Author.emailLower` — ordinary Prisma `String` fields, set
+  once in `AuthorsService.findOrCreate` (the **only** place `username`/`email` are ever
+  written — an identity's username/email never change post-creation, since
+  `@@unique([username, email])` makes that pair the identity itself).
+  `CommentsService.buildRootOrderBy` now sorts on these instead of `username`/`email`.
+- A real DB-generated column would guarantee sync at the Postgres level rather than by
+  convention, but Prisma has no schema syntax for `GENERATED ALWAYS AS` — every future
+  migration touching `authors` would need hand-written DDL to avoid Prisma's migration
+  diffing clobbering it, for a table with exactly one write path today. Not worth the
+  ongoing friction; noted in code-style-reference.md as the thing to revisit if a second
+  `Author`-creating path ever appears.
+- Fully injection-safe by construction — no raw SQL anywhere in the query path, just a
+  normal Prisma field populated via `.toLowerCase()` and sorted on via `orderBy`.
+- Migration `20260903122801_author_lowercase_sort_columns`: adds both columns nullable,
+  backfills existing rows (`UPDATE ... SET x = lower(y)`), then sets `NOT NULL` — needed
+  because the table already had rows and neither column has a meaningful constant
+  default. New `@@index([usernameLower])` / `@@index([emailLower])` for sort performance.
+  Documented in code-style-reference.md → "Case-insensitive sorting".
+
+**Tests**:
+- `comments.service.spec.ts`: the `sorts by %s %s` table now asserts `orderBy` targets
+  `author.usernameLower` / `author.emailLower`, not `username`/`email`.
+- `authors.service.spec.ts`: new case asserting `findOrCreate({ username: 'TestUser1',
+  email: 'TestUser1@Example.COM' })` upserts `usernameLower: 'testuser1'` /
+  `emailLower: 'testuser1@example.com'`.
+- `comments-read.e2e-spec.ts`: seeded roots now include a mixed-case `TestUser1` (4 roots
+  total: zeta, alpha, mike, TestUser1). `sorts by USERNAME ascending and descending` and
+  `sorts by EMAIL ascending` assert the real, case-insensitive Postgres order (`alpha`,
+  `mike`, `TestUser1`, `zeta` ascending) — this is the regression test: it runs against
+  the real DB collation, so it would have caught the original bug. Adjusted the
+  now-stale hardcoded counts (`totalCount: 3 → 4`, and `4 → 5` after the cache-bust
+  test's extra seeded root) accordingly.
+
+**Verified**: build / lint / **79 unit** / **51 e2e** green (unit +1 for the
+`findOrCreate` lowercasing case; e2e count unchanged — existing sort tests got a 4th
+seeded root and stricter assertions, no tests added or removed). One transient e2e
+failure was seen on the first
+full-suite run of this session (`banAuthor` test: a `spammer` identity left **banned**
+in the dev Postgres from earlier ad-hoc/manual runs today, unrelated to this fix —
+`moderation.e2e-spec.ts` doesn't truncate `authors` itself); a later spec file's
+`deleteMany({})` cleared it and three consecutive full runs since have been clean.
+Pre-existing test-isolation gap, not touched by this change — worth a follow-up ticket
+if it recurs.

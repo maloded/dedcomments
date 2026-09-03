@@ -24,6 +24,12 @@ export class AuthorsService {
 	 *
 	 * A **banned** identity is rejected here — this is the choke point every
 	 * `createComment` goes through.
+	 *
+	 * This is also the only place `username`/`email` are ever written, so it's
+	 * the one spot responsible for keeping `usernameLower`/`emailLower` (used by
+	 * `rootComments`' case-insensitive sort — see code-style-reference.md →
+	 * "Case-insensitive sorting") in sync. `username`/`email` never change after
+	 * a row is created (they're the identity), so this only needs to run on insert.
 	 */
 	public async findOrCreate(identity: AuthorIdentity): Promise<Author> {
 		const { username, email } = identity;
@@ -41,7 +47,13 @@ export class AuthorsService {
 
 		return this.prismaService.author.upsert({
 			where: { username_email: { username, email } },
-			create: { username, email, homepage },
+			create: {
+				username,
+				email,
+				homepage,
+				usernameLower: username.toLowerCase(),
+				emailLower: email.toLowerCase(),
+			},
 			update: homepage ? { homepage } : {},
 		});
 	}

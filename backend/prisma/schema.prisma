@@ -21,6 +21,16 @@ model Author {
   email    String
   homepage String?
 
+  // Lowercased mirrors of username/email, kept in sync by AuthorsService.findOrCreate
+  // (the only path that writes username/email — see code-style-reference.md →
+  // "Case-insensitive sorting"). Sorted on instead of username/email so
+  // `rootComments(sortBy: USERNAME | EMAIL)` is case-insensitive without Postgres's
+  // default collation putting every "Z..." before every "a...". Prisma's `orderBy`
+  // has no `mode: 'insensitive'` (that only exists on `where` filters), so this is
+  // the idiomatic fallback.
+  usernameLower String
+  emailLower    String
+
   // Set by a moderator (banAuthor). A banned identity cannot post new comments.
   isBanned Boolean @default(false)
 
@@ -34,6 +44,9 @@ model Author {
   // Root-list sorting/pagination is by Author.username / Author.email (brief §3.2).
   @@index([username])
   @@index([email])
+  // Case-insensitive root-list sorting (see usernameLower/emailLower above).
+  @@index([usernameLower])
+  @@index([emailLower])
   @@map("authors")
 }
 
