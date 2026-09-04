@@ -1972,3 +1972,129 @@ build` / `eslint` clean.
 **Deviation**: none beyond the `--connector-x`/`--connector-elbow-y`
 media-query fix bundled in, since it's the same root cause class and was
 found while fixing the reported issue in the same file.
+
+---
+
+### Post-Step-13 bug fix, round 2 — connector lines rebuilt as a measured SVG overlay (done)
+
+The round-1 fix above ("correct connector-line drift") was real but
+insufficient — the user came back with a screenshot of an actual 7-level
+thread still showing drift, milder than before but present. This entry is
+the thorough re-investigation that was explicitly asked for instead of a
+third round of static-CSS patching.
+
+**Measured first, before touching anything.** At 2–3 depths, in the live
+browser: each `.replies` wrapper's `border-left`/padding (there was no
+`border-left` at all, contrary to one working theory), each avatar's real
+`getBoundingClientRect()` centre, and where the connector `::before`/`::after`
+boxes actually drew. Per-node, spine-vs-own-avatar was exact (0px) at every
+depth in plain CSS-pixel terms — round 1's fix genuinely held for a simple,
+linear reply chain. So the deeper investigation had to go looking for what a
+straight chain doesn't exercise: **a debug build with the spine/elbow/mask
+pseudo-elements recoloured** (red/green/yellow outlines) on the user's actual
+branching shape (`haddock` with three children — `carla`, `Juno`, `ingram` —
+where `Juno` itself has its own nested replies) made the real bug visible
+immediately: haddock's spine (bright red) ran straight through `Juno`'s own
+nested subtree (`dave`, `carla`, `carol`), clearly to the side of their
+avatars — not the constant-offset kind of drift, a scope bug.
+
+**Root cause.** `:last-child::after` can only mask a parent's spine below
+*its own* box — from its own elbow down to its own bottom. That's correct
+**only** when the last-rendered sibling is also the tallest, i.e. the thread
+never branches. As soon as an *earlier* sibling (`Juno`, not `haddock`'s
+`:last-child`) has its own nested replies, that sibling's flex item becomes
+taller than a single row, and the parent's spine — which runs the *full
+height* of `.repliesInner`, unconditionally — stays visible running straight
+through that sibling's nested content, because nothing in the CSS knows
+where "Juno's own row" ends and "Juno's children" begin. This is not a
+number you can fix with a better `calc()`: it depends on the actual rendered
+shape of an arbitrary, data-driven, unevenly-branching tree, which static CSS
+geometry cannot see. Confirmed by hitting exactly this shape organically —
+the user's own manual testing between sessions had grown the `Aurora` thread
+a second sibling under `haddock` (`Juno` → `dave`), which is precisely the
+case round 1's fix never exercised.
+
+**This is the case the task's instructions anticipated** ("if a robust,
+exact-pixel-accurate result isn't achievable with pure CSS … switch to a more
+reliable method"). Third-time pure-CSS patching was explicitly ruled out, so:
+
+**New approach — measured, not calculated.** The connector graphic is now an
+absolutely-positioned SVG (`.connectorLayer`) overlaying `.CommentThread`,
+with one independent `<path>` per parent→reply edge — no shared spine, so
+there's nothing for one edge to accidentally run through another's territory.
+- `Avatar` forwards arbitrary props now, so each avatar in the thread carries
+  `data-node-id`/`data-connector-avatar` (`CommentThreadNode`).
+- A new hook, `useConnectorLines` (`useLayoutEffect` + `ResizeObserver` on the
+  container), measures every visible avatar's real `getBoundingClientRect()`
+  centre, walks the *actual* fetched tree (`ThreadNode.replies`, not an
+  assumed shape) to get the real parent→child id pairs, and pairs them up —
+  skipping any avatar under a collapsed subtree (`data-connector-collapsed`)
+  so hidden nodes don't get phantom lines.
+- `CommentThread` renders one quadratic-Bézier-cornered `<path>` per edge:
+  straight down from the parent avatar centre, a quarter turn, straight
+  across into the child avatar centre. Painted *before* the comment content
+  in DOM order (both are `position: relative`, so paint order follows DOM
+  order within that stacking bucket) — lines tuck behind avatars, not over
+  them.
+- `ResizeObserver` re-measures on every layout change that could move an
+  avatar — collapse/expand and reply-form open/close animating the
+  container's height, an attachment image loading, window resize/reflow —
+  one mechanism instead of hooking each trigger individually. It fires
+  continuously during a CSS transition, so lines stay in sync as a subtree
+  animates open or closed, not just snapping at the end.
+- Removed from `CommentThread.module.scss`: the spine/elbow/mask
+  pseudo-elements, the `.body` collapse-stub, and the hover-highlight
+  `:has()` rule (a cosmetic bonus from Step 13 — dropped rather than rebuilt
+  with the new architecture, to keep this fix's surface area focused on
+  correctness). `--connector-x`/`--connector-elbow-y`/`--connector-radius`
+  removed from `tokens.scss` (the curve radius is now a plain JS constant);
+  `--avatar-size`/`--connector-gutter`/`--connector-color` stay — indentation
+  spacing and the SVG stroke colour still read them.
+
+**Incidental fix, found while verifying, needed to even test this.** Pushing
+the test thread deep enough to reproduce the branching shape (10+ levels)
+hit a **pre-existing, unrelated hard crash**: `commentThread.graphql` nests
+`replies` exactly 10 levels deep, so a comment at that exact depth boundary
+has no `replies` key in the response at all — not an empty array, absent.
+`CommentThreadNode` (`node.replies.length`) and the new `collectEdges`
+(`for...of node.replies`) both assumed it always exists and threw
+`TypeError: Cannot read properties of undefined (reading 'length')`,
+white-screening the whole page. This is unrelated to connector positioning,
+but it happened to be organically triggered by the same manual testing that
+surfaced the branching-drift bug, and it blocked verifying the fix above, so
+it was fixed in the same pass: `ThreadNode.replies` is now typed `?:` (was
+`:`, a lie about what the API actually returns), and every reader treats a
+missing value as `[]`.
+
+**Verified** (full `docker compose up -d --build` stack, the same `Aurora`
+thread the user's screenshot came from, now with `haddock`'s real
+`carla`/`Juno`(→`dave`→`carla`→`carol`)/`ingram` branching intact — not
+simplified back to a linear chain): programmatically matched every rendered
+`<path>` endpoint against every visible avatar's real centre — **0px delta
+for all 13 edges** across 14 avatars, depths 1 through the 10-deep test data
+(past the 6-level visual cap). Repeated at 375px mobile (also 0px delta,
+`scrollWidth === clientWidth`, no overflow). Collapsed and re-expanded a
+mid-thread subtree (`bornholm`, which contains the deep branch) and
+re-measured — still 0px delta, confirming it isn't render-path-dependent.
+Re-checked under `prefers-reduced-motion: reduce` — collapse/expand and
+reply-form open/close still correctly show/hide the right avatars and
+converge to 0px delta (settling can lag a build-up of *back-to-back*
+resize-triggering interactions by up to roughly a second before the
+`ResizeObserver` catches up — noted as a minor, self-correcting
+characteristic, not a positioning-accuracy issue, and not something a normal
+single-click-at-a-time user would notice). Zero console errors/page errors
+on the branching thread that used to crash. `tsc --noEmit` / `next build` /
+`eslint` all clean.
+
+**Deviations**
+- **Pure CSS → measured JS positioning**, as the task explicitly authorized
+  once two static-CSS rounds proved the geometry isn't expressible statically
+  for an arbitrary branching tree.
+- **Dropped the hover-highlight-connector cosmetic** from Step 13 rather than
+  reimplementing it against the new per-edge-path architecture (would need
+  hover state lifted out of each `CommentThreadNode` to `CommentThread` to
+  pick the right `<path>`) — a bonus flourish, not core to the connector's
+  job, and out of scope for a correctness fix.
+- **Fixed the depth-10 `undefined` `.replies` crash** alongside the intended
+  fix, since it blocked verifying it and was trivially guarded — flagged
+  distinctly here rather than folded silently into the connector fix.

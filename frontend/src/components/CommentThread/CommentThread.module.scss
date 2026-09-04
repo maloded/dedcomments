@@ -2,33 +2,45 @@
 
 // Reddit-style dark comment thread (see docs/reference-screenshots/):
 //   • identicon avatar on the meta line, body text indented to align past it
-//   • a gray connector graphic — a vertical spine under each comment's avatar,
-//     curving into each reply's avatar; the spine stops at the last reply
+//   • a gray connector graphic — one SVG line per parent→reply edge, drawn
+//     from *measured* avatar positions (see `useConnectorLines`), not static
+//     CSS offsets — two pure-CSS attempts at this both drifted; see
+//     CLAUDE.md's post-Step-13 entries for the full story
 //   • height-animated collapse (CSS grid 1fr → 0fr) and reply-form open/close
 //
-// Connector geometry is driven entirely by the `--connector-*` / `--avatar-size`
-// custom properties (defined in tokens.scss, retuned for mobile at the bottom of
-// this file), so there are no magic pixel values scattered through the rules.
+// `--avatar-size` / `--connector-gutter` (in tokens.scss, retuned for mobile
+// below) still control indentation/spacing — only the connector *line* moved
+// out of static CSS.
 
 .CommentThread {
+  position: relative; // containing block for .connectorLayer
   padding: var(--space-3) var(--space-4);
   animation: thread-in var(--dur-base) var(--ease-out) backwards;
 
   @media (max-width: tokens.$breakpoint-mobile) {
     padding: var(--space-3);
-    // One place to tighten the whole connector + avatar system on small screens.
-    // `--connector-x`/`--connector-elbow-y` must be redeclared here too, not just
-    // `--avatar-size` — a custom property's `var()` references are substituted
-    // once, using the cascade where *that property* is declared, so the
-    // `calc(var(--avatar-size) / 2)` in tokens.scss's `:root` rule stays baked to
-    // the desktop 24px and doesn't react to this override on its own (a real,
-    // if harmless-looking, instance of the same "compute once, drifts on
-    // descendants" class of bug as the drift fix above).
     --avatar-size: 20px;
     --connector-gutter: var(--space-4);
-    --connector-x: calc(var(--avatar-size) / 2);
-    --connector-elbow-y: calc(var(--space-1) + var(--avatar-size) / 2);
   }
+}
+
+// The connector overlay — sized to exactly cover .CommentThread's content box
+// (an absolutely positioned element with inset:0 resolves against the
+// *already-laid-out* height of its non-absolute siblings, so this tracks the
+// thread's real height with no JS needed for sizing, only for the paths).
+.connectorLayer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.connectorPath {
+  fill: none;
+  stroke: var(--connector-color);
+  stroke-width: 2px;
+  stroke-linecap: round;
 }
 
 @keyframes thread-in {
@@ -52,36 +64,20 @@
   font: var(--font-sm);
 }
 
+// Positioned (no z-index) so a node's own content paints in the same
+// DOM-order stacking bucket as `.connectorLayer` (also positioned) — a
+// positioned element always paints over a non-positioned sibling regardless
+// of DOM order, which would otherwise put the connector lines *in front of*
+// every avatar instead of tucked behind them.
 .CommentThreadNode {
   position: relative;
 }
 
 .body {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   padding: var(--space-1) 0 var(--space-2);
-
-  // The connector "stub": a short vertical line dropping from this comment's
-  // avatar into its replies region, so the spine (drawn from the top of
-  // `.repliesInner`) visually originates at the avatar rather than floating
-  // below the comment's own text/actions. Same `--connector-x` anchor as the
-  // spine, so they're always colinear.
-  &:has(~ .replies)::after {
-    content: "";
-    position: absolute;
-    left: calc(var(--connector-x) - 1px);
-    top: calc(var(--space-1) + var(--avatar-size));
-    bottom: calc(-1 * var(--space-1));
-    width: 2px;
-    background: var(--connector-color);
-  }
-
-  // collapsed subtree — no dangling stub
-  &:has(~ .replies.collapsed)::after {
-    display: none;
-  }
 }
 
 .meta {
@@ -216,13 +212,10 @@
   }
 }
 
-// ─── The replies container + connector graphic ────────────────────────────
-// The per-level indent is `--connector-gutter`, applied ONCE as `.repliesInner`'s
-// padding — `.replies` itself has no horizontal offset. So `.repliesInner`'s left
-// edge is exactly this comment's own node-left, and every connector piece below
-// is `--connector-x` from that same edge → the spine, its children's elbows and
-// the collapse stub are always colinear, at every depth, with no accumulating
-// rounded-offset chain (the drift bug this replaces).
+// ─── The replies container ─────────────────────────────────────────────────
+// Purely spacing + the collapse height-animation now — the connector graphic
+// that used to be drawn here (spine/elbow/mask pseudo-elements) moved to the
+// SVG overlay in CommentThread.tsx.
 .replies {
   display: grid;
   grid-template-rows: 1fr;
@@ -234,78 +227,17 @@
 }
 
 .repliesInner {
-  position: relative;
   overflow: hidden;
   min-height: 0;
   padding-left: var(--connector-gutter);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-
-  // the vertical spine — centred on this comment's avatar, full height of the
-  // replies block
-  &::before {
-    content: "";
-    position: absolute;
-    left: calc(var(--connector-x) - 1px);
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: var(--connector-color);
-  }
 }
 
-// Each reply: a curved elbow branching off the spine and running to its own
-// avatar's centre (it's drawn before `.body` in the box tree, so it tucks
-// behind the avatar rather than over it). Left edge sits exactly on the spine
-// (`--connector-x - 1px`, same as `.repliesInner::before`). All x stays >= 0
-// inside `.repliesInner`, so `overflow: hidden` (needed for the collapse
-// animation) never clips it.
-.repliesInner > .CommentThreadNode {
-  &::before {
-    content: "";
-    position: absolute;
-    left: calc(var(--connector-x) - 1px - var(--connector-gutter));
-    top: 0;
-    width: var(--connector-gutter);
-    height: var(--connector-elbow-y);
-    border-bottom: 2px solid var(--connector-color);
-    border-bottom-left-radius: var(--connector-radius);
-  }
-
-  // last reply: mask the spine below this elbow so it doesn't run past the
-  // final avatar (matches the expanded-thread panel background)
-  &:last-child::after {
-    content: "";
-    position: absolute;
-    left: calc(var(--connector-x) - 1px - var(--connector-gutter));
-    top: var(--connector-elbow-y);
-    height: calc(100% - var(--connector-elbow-y));
-    width: 4px;
-    background: var(--color-surface);
-  }
-}
-
-.repliesInner::before,
-.repliesInner > .CommentThreadNode::before,
-.repliesInner > .CommentThreadNode:last-child::after {
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
-}
-
-// Hovering a node's collapse toggle lights up the connector for *its* replies
-// only (no ancestor-chain bubbling — the `:has()` is scoped to the direct child).
-.CommentThreadNode:has(> .body .collapseToggle:hover) {
-  > .replies .repliesInner::before {
-    background: var(--thread-line-color-active);
-  }
-
-  > .replies .repliesInner > .CommentThreadNode::before {
-    border-color: var(--thread-line-color-active);
-  }
-}
-
-// Past the visual depth cap: keep the avatar-aligned spine, just tighten the
-// per-level indent so deep threads don't run off screen.
+// Past the visual depth cap: tighten the per-level indent so deep threads
+// don't run off screen (the connector line still draws correctly regardless —
+// it just measures wherever the avatar ends up).
 .indentCapped .repliesInner {
   padding-left: var(--space-4);
 }

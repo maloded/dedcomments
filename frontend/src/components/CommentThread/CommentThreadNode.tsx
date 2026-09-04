@@ -26,6 +26,12 @@ function isUnauthorized(err: unknown): boolean {
  * `replies`) — see `CommentThread.tsx`, which does the one bounded cast where
  * the generated type (fetched to a fixed depth — see commentThread.graphql)
  * meets this self-referential interface.
+ *
+ * `replies` is genuinely optional, not just possibly-empty: the query nests
+ * it 10 levels deep, so a node at exactly that depth boundary has no
+ * `replies` key in the response at all. Every reader must treat a missing
+ * `replies` the same as an empty one (`node.replies ?? []`) — see
+ * CommentThreadNode's `hasReplies` and `useConnectorLines`'s `collectEdges`.
  */
 export interface ThreadNode {
   id: string;
@@ -40,14 +46,16 @@ export interface ThreadNode {
     url: string;
     originalName: string;
   } | null;
-  replies: ThreadNode[];
+  replies?: ThreadNode[];
 }
 
 /**
  * Matches CLAUDE.md → "Tree rendering on the frontend": indentation grows with
- * depth up to this cap, then stays fixed (the thread connector carries the rest
- * of the visual nesting so deep threads don't run off screen). Tightened on
- * mobile via the `--connector-*` custom properties — see CommentThread.module.scss.
+ * depth up to this cap, then grows more slowly rather than stopping outright
+ * (`.indentCapped`, in CommentThread.module.scss) so deep threads don't run
+ * off screen. Tightened further on mobile via `--avatar-size`/`--connector-gutter`.
+ * The connector *line* itself doesn't care about any of this — see
+ * `useConnectorLines`, which measures wherever avatars actually end up.
  */
 const MAX_VISUAL_DEPTH = 6;
 
@@ -84,7 +92,18 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
   const [hideCommentMutation, { loading: hiding }] = useMutation(HideCommentDocument);
   const [banAuthorMutation, { loading: banning }] = useMutation(BanAuthorDocument);
 
-  const hasReplies = node.replies.length > 0;
+  // `node.replies` can genuinely be `undefined` here, not just empty: the
+  // fetched query nests `replies` 10 levels deep (see commentThread.graphql),
+  // so a comment at exactly that depth boundary has no `replies` field in the
+  // response at all, however few or many real children it has past that
+  // point. Found while verifying the connector-line fix below with a
+  // manually-deepened test thread — a pre-existing gap, unrelated to the
+  // connector work, but it hard-crashed the page (`TypeError: Cannot read
+  // properties of undefined (reading 'length')`) and blocked testing, so
+  // fixed alongside it. `MAX_VISUAL_DEPTH` (6) means this is very unlikely to
+  // bite in the shallower threads the UI is tuned for, but it's a real crash
+  // for any thread that grows deep enough.
+  const hasReplies = (node.replies?.length ?? 0) > 0;
   // Past this depth the nesting container stops adding indent (the connector
   // still draws) so deep threads don't march off the right edge — see
   // CommentThread.module.scss `.indentCapped`.
@@ -173,6 +192,11 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           <Avatar
             className={cls.metaAvatar}
             seed={`${node.author.username} ${node.author.email}`}
+            // The two hooks `useConnectorLines` measures from — see its doc
+            // comment for why the connector line is positioned this way
+            // instead of by static CSS offsets.
+            data-node-id={node.id}
+            data-connector-avatar="true"
           />
           <span className={cls.username}>{node.author.username}</span>
           <span className={cls.date}>{formatDate(node.createdAt)}</span>
@@ -248,9 +272,13 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
             [cls.indentCapped]: indentCapped,
             [cls.collapsed]: collapsed,
           })}
+          // Read by `useConnectorLines` — a collapsed subtree stays mounted
+          // (for the height animation) but its avatars shouldn't get a
+          // connector line drawn to them while they're not visible.
+          data-connector-collapsed={collapsed ? "true" : undefined}
         >
           <div className={cls.repliesInner}>
-            {node.replies.map((reply) => (
+            {node.replies?.map((reply) => (
               <CommentThreadNode
                 key={reply.id}
                 node={reply}

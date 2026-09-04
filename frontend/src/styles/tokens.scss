@@ -69,11 +69,10 @@
   // Interactive-surface states
   --color-row-hover: #1b1e22; // a comment/table row under the pointer
 
-  // Thread connector lines — the gray graphic linking a comment to its replies
-  // (see CommentThread.module.scss). Must read on dark, so lighter than the
-  // light theme's value; `-active` is for the hovered subtree.
+  // Thread connector lines — the gray graphic linking a comment to its
+  // replies (see CommentThread.tsx / useConnectorLines). Must read on dark,
+  // so lighter than the light theme's value.
   --thread-line-color: #474d57;
-  --thread-line-color-active: #6b7581;
 
   // Skeleton shimmer — a faint light sweep, not a hard white one.
   --skeleton-base: #202329;
@@ -83,20 +82,16 @@
   --overlay-scrim: rgba(0, 0, 0, 0.72);
 
   // ─── Avatars + connectors (geometry) ─────────────────────────────────────
-  // Retuned for mobile on `.CommentThread` — only `--avatar-size` and
-  // `--connector-gutter` change there; everything else recomputes from them.
+  // `--avatar-size` and `--connector-gutter` (the per-level reply indent,
+  // applied once as `.repliesInner`'s padding-left) are retuned for mobile on
+  // `.CommentThread`. The connector *line* itself no longer reads either of
+  // these — after two pure-CSS attempts both drifted (see CLAUDE.md's
+  // post-Step-13 entries), it's drawn from real measured avatar positions
+  // instead (`useConnectorLines` + the SVG overlay in `CommentThread.tsx`);
+  // `--connector-color` is the one thing it still reads from here.
   --avatar-size: 24px;
   --connector-color: var(--thread-line-color);
-  // `--connector-x` is THE single horizontal anchor for the whole connector
-  // graphic (spine, elbow, stub, mask all measure from it) — an avatar's centre
-  // offset from its node's left edge. The per-level indent is `--connector-gutter`
-  // applied *once* (as `.repliesInner` padding); nothing else offsets the
-  // connector, so there's no rounded-offset chain to accumulate drift across
-  // nesting levels.
-  --connector-x: calc(var(--avatar-size) / 2);
-  --connector-gutter: var(--space-5); // reply indent per level (.repliesInner padding-left)
-  --connector-elbow-y: calc(var(--space-1) + var(--avatar-size) / 2); // avatar vertical centre in a node
-  --connector-radius: 10px; // the curve where the spine turns into a reply
+  --connector-gutter: var(--space-5);
 
   // ─── Spacing scale ───────────────────────────────────────────────────────
   --space-0: 2px;
