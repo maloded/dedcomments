@@ -127,6 +127,17 @@
   color: var(--color-danger);
 }
 
+// Honest fallback for a comment whose replies exist (repliesCount > 0) but
+// sit past commentThread.graphql's fixed fetch depth — see CommentThreadNode's
+// `hiddenByFetchDepth`. Informational, not an error: muted, not danger-red.
+.depthNotice {
+  padding-left: calc(var(--avatar-size) + var(--space-2));
+  margin: 0;
+  font: var(--font-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 // Body text / attachment / actions align under the username, not the avatar.
 .text {
   padding-left: calc(var(--avatar-size) + var(--space-2));

@@ -2098,3 +2098,84 @@ on the branching thread that used to crash. `tsc --noEmit` / `next build` /
 - **Fixed the depth-10 `undefined` `.replies` crash** alongside the intended
   fix, since it blocked verifying it and was trivially guarded — flagged
   distinctly here rather than folded silently into the connector fix.
+
+---
+
+### Post-Step-13 bug fix — replies at depth 11+ silently vanished (done)
+
+**Reported as**: replying to a comment 11 levels deep "fails" — the reply
+doesn't get created. Diagnosed before touching anything, per the task's own
+instructions, because three genuinely different bugs were on the table
+(reply form broken at that depth, the mutation erroring, or the mutation
+succeeding but not rendering) and each needs a different fix.
+
+**Diagnosis.** Reproduced against the real UI, network tab open: clicked
+Reply on a depth-10 comment, solved the CAPTCHA, submitted. The
+`createComment` mutation returned **200 with a clean success payload** —
+`{ id, text, parentId, ... }`, no GraphQL error. Confirmed independently in
+Postgres: the row exists, correct `parentId`. So the write path (mutation,
+backend, DB) was never broken, exactly as the bug report suspected. But the
+new reply **never appeared anywhere in the tree**, before or after the
+in-flight `refetchQueries` settled, and the reply form closed as if
+successful (because, from the client's perspective, it was). That's the
+"succeeds but doesn't render" branch — not a mutation failure, and nothing
+to do with `useConnectorLines` (no console/page errors at any point in the
+flow; that code simply had nothing to measure for a node that was never in
+the fetched data in the first place).
+
+**Root cause**: `commentThread.graphql`'s hand-unrolled fragment (GraphQL has
+no recursive-fragment construct — see that file's own header comment) nested
+`replies` exactly **10 levels deep**. A comment at exactly that depth
+boundary has no `replies` field in the response *at all* — not empty, absent
+— so **nothing whose parent sits at the boundary can ever appear**, no
+matter how many times the query is refetched. The "Reply" button itself is
+unconditional (doesn't check whether `replies` was fetched), so nothing
+stopped a user from replying at the boundary; the result just had nowhere to
+go. This is the same class of gap the previous two fix entries kept
+surfacing pieces of — a fixed unroll depth silently discarding anything past
+it — just hit from the write side this time instead of a rendering
+artifact.
+
+**Fix**:
+- Regenerated `commentThread.graphql` with the fragment unrolled to **30
+  levels** (a generated file now — the previous 10 levels were hand-typed;
+  30 by hand invites exactly the kind of transcription slip this bug already
+  came from, so a one-off script emitted the nested structure and
+  `npm run codegen` regenerated `generated.ts` from it, same as always).
+  30 is a large multiple of both the UI's visual depth cap (6) and the
+  deepest thread exercised in testing so far (this fix's own verification
+  reached 20) — not "unlimited" (GraphQL genuinely can't express that in one
+  query), but comfortably past anything this brief's scope will organically
+  produce.
+- **Also added an honest fallback**, so this specific failure mode — data
+  existing but silently, indistinguishably not showing up — can't recur even
+  if a thread someday does outgrow 30 levels: `repliesCount` (an
+  unconditional direct-reply count, fetched at every level regardless of
+  depth) is compared against whether `replies` was actually fetched.
+  `hiddenByFetchDepth` (`CommentThreadNode`) is true exactly when a node has
+  real replies the query couldn't reach; it renders a small muted notice —
+  "N more replies past this point aren't shown here … they still exist and
+  can be replied to" — instead of the previous silence.
+
+**Verified** (full `docker compose up -d --build` stack): reproduced the
+exact reported failure first (depth-10 reply invisible after a real,
+UI-driven submit — confirmed via the mutation's own network response *and*
+a direct DB read that the row existed all along). After the fix: that same
+already-created reply appeared immediately once the page reloaded the
+(now-30-deep) query; built the chain out to **depth 20** (mixing direct
+mutation calls, the same way the app's own network requests work, with one
+fully UI-driven Reply→fill→CAPTCHA→submit at the deepest point) — the depth
+20 reply appeared **immediately, no reload**, mutation response clean, zero
+console/page errors. Programmatically matched every connector `<path>`
+against its avatar across all 29 edges of the 30-node tree — **0px delta at
+every one**, depths 0 through 20, and confirmed visually that indentation
+still caps correctly past `MAX_VISUAL_DEPTH` (6) rather than marching off
+screen. Repeated at 375px mobile (30 avatars, 29 paths, 0px delta, no
+horizontal overflow). **Regression check**: replied to a depth-2 comment
+(`delacroix`) — worked exactly as before, appeared immediately, its
+`repliesCount`/collapse-toggle state correct. `tsc --noEmit` / `next build`
+/ `eslint` all clean.
+
+**Deviation**: none — scope stayed to the one reported failure mode (plus
+the honest-fallback notice, which is the direct fix for *why* it read as a
+silent failure rather than a visible error, not a separate feature).

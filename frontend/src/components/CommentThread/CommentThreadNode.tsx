@@ -93,17 +93,20 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
   const [banAuthorMutation, { loading: banning }] = useMutation(BanAuthorDocument);
 
   // `node.replies` can genuinely be `undefined` here, not just empty: the
-  // fetched query nests `replies` 10 levels deep (see commentThread.graphql),
+  // fetched query nests `replies` 30 levels deep (see commentThread.graphql),
   // so a comment at exactly that depth boundary has no `replies` field in the
   // response at all, however few or many real children it has past that
-  // point. Found while verifying the connector-line fix below with a
-  // manually-deepened test thread — a pre-existing gap, unrelated to the
-  // connector work, but it hard-crashed the page (`TypeError: Cannot read
-  // properties of undefined (reading 'length')`) and blocked testing, so
-  // fixed alongside it. `MAX_VISUAL_DEPTH` (6) means this is very unlikely to
-  // bite in the shallower threads the UI is tuned for, but it's a real crash
-  // for any thread that grows deep enough.
+  // point. `repliesCount` (a direct, unconditional count from the backend)
+  // is fetched at every level regardless, so it's the one reliable signal
+  // for "there's more below that this query just can't reach" — see
+  // `hiddenByFetchDepth` below, which turns that into an honest notice
+  // instead of the silent data loss this used to be (a reply posted past the
+  // fetch boundary used to succeed on the backend and then never appear
+  // anywhere, indistinguishable from the mutation having failed — see
+  // CLAUDE.md's fix entry for the full story).
+  const repliesFetched = node.replies !== undefined;
   const hasReplies = (node.replies?.length ?? 0) > 0;
+  const hiddenByFetchDepth = !repliesFetched && node.repliesCount > 0;
   // Past this depth the nesting container stops adding indent (the connector
   // still draws) so deep threads don't march off the right edge — see
   // CommentThread.module.scss `.indentCapped`.
@@ -252,6 +255,13 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
             </Button>
           )}
         </div>
+        {hiddenByFetchDepth && (
+          <p className={cls.depthNotice}>
+            {node.repliesCount} more {node.repliesCount === 1 ? "reply" : "replies"} past this
+            point aren&apos;t shown here (thread too deep to fetch in one request) — they still
+            exist and can be replied to, just not viewed nested this far down.
+          </p>
+        )}
         {moderationError && <span className={cls.moderationError}>{moderationError}</span>}
         {replying && (
           <div className={classNames(cls.replyForm, { [cls.replyClosing]: replyClosing })}>
