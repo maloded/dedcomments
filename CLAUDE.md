@@ -1691,3 +1691,76 @@ suite untouched.
   demo video** — the brief's "Delivery format" section. With the visual pass
   done, the app is feature- *and* polish-complete; these delivery artefacts
   are all that remain.
+
+---
+
+### Step 12 — pagination verified against real multi-page data (done)
+
+Closes the pagination self-check that had been deferred through every
+frontend session (Steps 6-11). No app-code changes — a dev seed utility plus
+manual + scripted browser verification.
+
+**Seed utility** — `backend/scripts/seed-comments.mjs` (kept; `npm run
+seed:comments -- [count]`, default 35). Bulk-creates root comments through
+the real `createComment` mutation, solving CAPTCHA the same way the e2e suite
+does (`backend/test/comments.e2e-spec.ts` → `solvedCaptcha()`: request a
+challenge, read the answer from Redis under `captcha:<token>`). Usernames are
+mixed-case and inserted out of alphabetical order (`Zed`, `amy`, `Bob`,
+`charlie`, …) so username sorting visibly reorders across the page boundary
+and re-exercises the case-insensitive-sort fix. `createComment` is
+rate-limited 10/min per IP, so the script backs off 60 s and resumes on a
+`THROTTLER` error. Dev-only (needs Redis access to read CAPTCHA answers); not
+linted/built (outside `src/`).
+
+**Data seeded**: DB went from 6 → **56 root comments → 3 pages** (25 / 25 /
+6). Left in place at the user's request — a curated dataset for the demo
+video is a separate pre-submission task, and `seed:comments` can rebuild a
+demo DB anyway.
+
+**Verified in the browser** (full `docker compose` stack, `next dev` on
+:3000, both 1280px desktop and 375px mobile):
+- Load → `Page 1 of 3`, Prev disabled, Next enabled.
+- Next → page 2: 25 rows, **both** Prev and Next enabled (middle page).
+- Next → page 3: 6 rows, Prev enabled, **Next disabled**.
+- Prev ×2 → page 1, state identical to initial load.
+- Sort → Username ASC: resets to page 1; walking all three pages gives
+  `aaron…golf` / `Hotel…whiskey` / `Xray…Zulu` — **case-insensitive,
+  monotonic, no duplicates or gaps at either page boundary** (`golf → Hotel`,
+  `whiskey → Xray`). Same check on mobile via the slim sort bar.
+- Back to Date DESC (LIFO) default: resets to page 1, dates descending within
+  and across pages, pagination still works.
+- Mobile: the pagination footer (`56 comments · Prev · Page N of 3 · Next`)
+  stays in-bounds and usable in the stacked-row layout;
+  `document.documentElement.scrollWidth === clientWidth` on every page.
+
+**Scripted cross-check** (`backend`, via GraphQL directly): 3-6 trials of a
+full 3-page sweep for `USERNAME ASC/DESC`, `EMAIL ASC`, `CREATED_AT DESC` —
+**every ID set was complete and duplicate-free**, ordering monotonic across
+boundaries in every trial.
+
+**Observations (not fixed — outside a verification task's scope, flagged for
+later)**:
+- `CommentsService.buildRootOrderBy` emits a single `orderBy` key with **no
+  secondary tiebreaker** (e.g. `{ id: 'asc' }`). Tied sort keys (duplicate
+  usernames/emails, or same-millisecond `createdAt` under bulk seeding) then
+  rely on Postgres returning a consistent order for the same query — stable
+  in every trial here, but a real (if low-risk) fragility. A one-line
+  addition if pagination drift is ever seen.
+- Next/Prev doesn't scroll the viewport back to the top of the list — mildly
+  awkward on mobile, where the buttons are at the page bottom.
+
+**Verified — build/lint**: no frontend changes; `backend` `lint` unaffected
+(`scripts/**` isn't in its lint glob), `package.json` gained one script
+entry. Backend test suite untouched.
+
+**Pending — next**: this was the last deferred functional/QA item. What
+remains is purely the brief's "Delivery format" section — the original plan's
+day 7-9 work:
+- **README** — what the project is, implemented features, run-from-scratch
+  instructions.
+- **DB schema export for MySQL Workbench** (`docs/db-schema.mwb` or a
+  Workbench-openable `.sql`).
+- **Deployment** to a VDS/cloud, then a from-a-clean-clone verification
+  against the README.
+- **Demo video** — short screen recording of the deployed app, with a
+  curated dataset.
