@@ -183,7 +183,7 @@
 .formSuccess {
   color: var(--color-success);
   background: var(--color-success-bg);
-  border: 1px solid rgba(70, 168, 0, 0.18);
+  border: 1px solid var(--color-success-subtle);
 }
 
 // Scoped under `.CommentForm` to win over the `Button` primitive's `.md`

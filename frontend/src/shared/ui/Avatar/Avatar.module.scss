@@ -1,0 +1,11 @@
+.Avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  display: block;
+  flex-shrink: 0;
+  background: var(--color-surface-muted);
+  // The identicon grid is drawn edge-to-edge; the pill radius clips it into a
+  // circle. A hairline ring keeps it from bleeding into a same-tone surface.
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}

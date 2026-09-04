@@ -11,6 +11,7 @@ import {
 import { classNames } from "@/shared/lib/classNames";
 import { Skeleton } from "@/shared/ui/Skeleton";
 import { Button } from "@/shared/ui/Button";
+import { Avatar } from "@/shared/ui/Avatar";
 import { CommentThread } from "@/components/CommentThread";
 import cls from "./RootCommentsTable.module.scss";
 
@@ -21,6 +22,32 @@ const SORTABLE_COLUMNS: { field: RootCommentSortField; label: string }[] = [
 ];
 
 const SKELETON_ROWS = 5;
+
+/** A single chevron that rotates 180° between DESC (down) and ASC (up), fades
+ * up to full strength / accent when its column is the active sort. */
+function SortIcon({ state }: { state: "asc" | "desc" | "none" }) {
+  return (
+    <svg
+      className={classNames(cls.sortIcon, {
+        [cls.sortIconActive]: state !== "none",
+        [cls.sortIconAsc]: state === "asc",
+      })}
+      viewBox="0 0 12 12"
+      width="12"
+      height="12"
+      aria-hidden="true"
+    >
+      <path
+        d="M2.5 4.5 L6 8 L9.5 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -87,19 +114,19 @@ export function RootCommentsTable() {
             <tr>
               {SORTABLE_COLUMNS.map(({ field, label }) => {
                 const active = field === sortBy;
+                const iconState = !active ? "none" : sortOrder === "ASC" ? "asc" : "desc";
                 return (
-                  <th key={field}>
+                  <th
+                    key={field}
+                    aria-sort={!active ? "none" : sortOrder === "ASC" ? "ascending" : "descending"}
+                  >
                     <button
                       type="button"
                       className={classNames(cls.sortButton, { [cls.active]: active })}
                       onClick={() => handleSort(field)}
                     >
                       {label}
-                      {active && (
-                        <span className={cls.sortArrow} aria-hidden="true">
-                          {sortOrder === "ASC" ? "▲" : "▼"}
-                        </span>
-                      )}
+                      <SortIcon state={iconState} />
                     </button>
                   </th>
                 );
@@ -145,7 +172,15 @@ export function RootCommentsTable() {
                 return (
                   <Fragment key={item.id}>
                     <tr>
-                      <td className={cls.username}>{item.author.username}</td>
+                      <td className={cls.username}>
+                        <span className={cls.authorCell}>
+                          <Avatar
+                            className={cls.avatar}
+                            seed={`${item.author.username} ${item.author.email}`}
+                          />
+                          {item.author.username}
+                        </span>
+                      </td>
                       <td className={cls.email} data-label="Email">
                         {item.author.email}
                       </td>

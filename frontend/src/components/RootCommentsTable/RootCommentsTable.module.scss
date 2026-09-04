@@ -67,9 +67,25 @@
     border-bottom: none;
   }
 
+  tbody tr:not(.threadRow) {
+    transition: background-color var(--dur-fast) ease;
+  }
+
   tbody tr:not(.threadRow):hover {
     background: var(--color-row-hover);
   }
+}
+
+// Author cell: avatar + name on one line.
+.authorCell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.avatar {
+  width: 20px;
+  height: 20px;
 }
 
 // Column emphasis: author reads first, everything else is supporting metadata.
@@ -102,28 +118,62 @@
 }
 
 .sortButton {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   background: none;
   border: none;
-  padding: 0;
+  padding: 0 0 var(--space-1);
   cursor: pointer;
   color: inherit;
   font: inherit;
   font-weight: inherit;
   text-transform: inherit;
   letter-spacing: inherit;
+  transition: color var(--dur-fast) ease;
 
-  &:hover,
+  // Animated active-column underline.
+  &::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    height: 2px;
+    width: 100%;
+    background: var(--color-accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform var(--dur-base) var(--ease-out);
+  }
+
+  &:hover {
+    color: var(--color-accent);
+  }
+
   &.active {
     color: var(--color-accent);
+
+    &::after {
+      transform: scaleX(1);
+    }
   }
 }
 
-.sortArrow {
-  font-size: 9px;
-  line-height: 1;
+.sortIcon {
+  color: var(--color-hint);
+  opacity: 0.4;
+  transition: transform var(--dur-base) var(--ease-out), color var(--dur-fast) ease,
+    opacity var(--dur-fast) ease;
+}
+
+.sortIconActive {
+  color: var(--color-accent);
+  opacity: 1;
+}
+
+.sortIconAsc {
+  transform: rotate(180deg);
 }
 
 .empty {
@@ -216,6 +266,11 @@
       font: var(--font-md);
       font-weight: 700;
       margin-bottom: var(--space-1);
+    }
+
+    .avatar {
+      width: 22px;
+      height: 22px;
     }
 
     .expandCell {

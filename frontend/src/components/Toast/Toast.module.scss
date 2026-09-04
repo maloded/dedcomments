@@ -4,18 +4,19 @@
   right: var(--space-5);
   z-index: var(--z-toast);
   max-width: min(320px, calc(100vw - var(--space-5) * 2));
-  background: var(--color-text);
-  color: var(--color-surface);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-pill);
   box-shadow: var(--shadow-md);
   font: var(--font-sm);
-  animation: toast-in 0.16s ease-out;
+  animation: toast-in var(--dur-base) var(--ease-out) backwards;
 }
 
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(var(--space-2));
+    transform: translateY(var(--space-3));
   }
 }

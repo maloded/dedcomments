@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@apollo/client/react";
 import { CombinedGraphQLErrors } from "@apollo/client/errors";
 import { Button } from "@/shared/ui/Button";
+import { Avatar } from "@/shared/ui/Avatar";
 import { CommentForm } from "@/components/CommentForm";
 import { AttachmentPreview } from "@/components/AttachmentPreview";
 import { previewCommentHtml } from "@/shared/lib/commentPreview";
@@ -44,9 +45,9 @@ export interface ThreadNode {
 
 /**
  * Matches CLAUDE.md → "Tree rendering on the frontend": indentation grows with
- * depth up to this cap, then stays fixed (a left "thread line" border carries
- * the rest of the visual nesting so deep threads don't run off screen). Halved
- * on mobile via `$breakpoint-mobile` — see CommentThread.module.scss.
+ * depth up to this cap, then stays fixed (the thread connector carries the rest
+ * of the visual nesting so deep threads don't run off screen). Tightened on
+ * mobile via the `--connector-*` custom properties — see CommentThread.module.scss.
  */
 const MAX_VISUAL_DEPTH = 6;
 
@@ -64,13 +65,18 @@ interface CommentThreadNodeProps {
 /**
  * One comment plus its replies, rendered recursively. Depth-capped indentation
  * (see `MAX_VISUAL_DEPTH`); replies render in the order the backend already
- * returns them (LIFO per level — no client-side re-sorting). Collapsing a
- * subtree is plain React state, not a re-fetch — the data's already in hand.
+ * returns them (LIFO per level — no client-side re-sorting).
+ *
+ * Collapsing a subtree is plain React state (the data's already in hand) — the
+ * replies stay mounted and the height animates via a CSS grid `1fr → 0fr`
+ * transition. The inline reply form animates open on mount and plays a close
+ * animation before unmounting (`replyClosing`).
  */
 export function CommentThreadNode(props: CommentThreadNodeProps) {
   const { node, depth, onReplyPosted } = props;
   const [collapsed, setCollapsed] = useState(false);
   const [replying, setReplying] = useState(false);
+  const [replyClosing, setReplyClosing] = useState(false);
   const [moderationError, setModerationError] = useState<string | null>(null);
   const [banned, setBanned] = useState(false);
 
@@ -79,10 +85,44 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
   const [banAuthorMutation, { loading: banning }] = useMutation(BanAuthorDocument);
 
   const hasReplies = node.replies.length > 0;
-  // Past this depth the nesting container stops adding indent (the thread line
-  // stays) so deep threads don't march off the right edge — see
+  // Past this depth the nesting container stops adding indent (the connector
+  // still draws) so deep threads don't march off the right edge — see
   // CommentThread.module.scss `.indentCapped`.
   const indentCapped = depth >= MAX_VISUAL_DEPTH;
+
+  // `replyClosing` swaps in the CSS collapse animation, then a short timer
+  // unmounts the form once it's played. A timer (not `animationend`) because
+  // the form's own children fire stray animation events, and this stays
+  // predictable under `prefers-reduced-motion` (globals.scss shortens the CSS
+  // to ~1ms; the 200ms here just briefly outlives it).
+  const REPLY_CLOSE_MS = 200;
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
+  function closeReply() {
+    if (closeTimer.current) return; // already closing
+    setReplyClosing(true);
+    closeTimer.current = setTimeout(() => {
+      setReplying(false);
+      setReplyClosing(false);
+      closeTimer.current = null;
+    }, REPLY_CLOSE_MS);
+  }
+
+  function toggleReply() {
+    if (replying && !replyClosing) {
+      closeReply();
+    } else {
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current);
+        closeTimer.current = null;
+      }
+      setReplyClosing(false);
+      setReplying(true);
+    }
+  }
 
   async function handleHide() {
     if (!session) return;
@@ -130,17 +170,10 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
     <div className={classNames(cls.CommentThreadNode, { [cls.root]: depth === 0 })}>
       <div className={cls.body}>
         <div className={cls.meta}>
-          {hasReplies && (
-            <Button
-              size="sm"
-              variant="clear"
-              className={cls.collapseToggle}
-              onClick={() => setCollapsed((c) => !c)}
-              aria-expanded={!collapsed}
-            >
-              {collapsed ? `+ ${node.repliesCount}` : "−"}
-            </Button>
-          )}
+          <Avatar
+            className={cls.metaAvatar}
+            seed={`${node.author.username} ${node.author.email}`}
+          />
           <span className={cls.username}>{node.author.username}</span>
           <span className={cls.date}>{formatDate(node.createdAt)}</span>
           {isLoggedIn && (
@@ -156,8 +189,6 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           )}
         </div>
 
-        {/* Collapsing hides replies, not this comment's own text — the toggle
-            summarizes a subtree, it isn't a way to hide the comment itself. */}
         <div
           className={cls.text}
           // previewCommentHtml is the same allowlist renderer the form's live
@@ -175,8 +206,21 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           </div>
         )}
         <div className={cls.actions}>
-          <Button size="sm" variant="clear" onClick={() => setReplying((r) => !r)}>
-            {replying ? "Cancel" : "Reply"}
+          {hasReplies && (
+            <Button
+              size="sm"
+              variant="clear"
+              className={cls.collapseToggle}
+              onClick={() => setCollapsed((c) => !c)}
+              aria-expanded={!collapsed}
+            >
+              {collapsed
+                ? `[+] ${node.repliesCount} ${node.repliesCount === 1 ? "reply" : "replies"}`
+                : "[–] collapse"}
+            </Button>
+          )}
+          <Button size="sm" variant="clear" onClick={toggleReply}>
+            {replying && !replyClosing ? "Cancel" : "Reply"}
           </Button>
           {isLoggedIn && (
             <Button size="sm" variant="clear" color="danger" onClick={() => void handleHide()} disabled={hiding}>
@@ -186,11 +230,11 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
         </div>
         {moderationError && <span className={cls.moderationError}>{moderationError}</span>}
         {replying && (
-          <div className={cls.replyForm}>
+          <div className={classNames(cls.replyForm, { [cls.replyClosing]: replyClosing })}>
             <CommentForm
               parentId={node.id}
               onSuccess={() => {
-                setReplying(false);
+                closeReply();
                 onReplyPosted();
               }}
             />
@@ -198,16 +242,23 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
         )}
       </div>
 
-      {!collapsed && hasReplies && (
-        <div className={classNames(cls.replies, { [cls.indentCapped]: indentCapped })}>
-          {node.replies.map((reply) => (
-            <CommentThreadNode
-              key={reply.id}
-              node={reply}
-              depth={depth + 1}
-              onReplyPosted={onReplyPosted}
-            />
-          ))}
+      {hasReplies && (
+        <div
+          className={classNames(cls.replies, {
+            [cls.indentCapped]: indentCapped,
+            [cls.collapsed]: collapsed,
+          })}
+        >
+          <div className={cls.repliesInner}>
+            {node.replies.map((reply) => (
+              <CommentThreadNode
+                key={reply.id}
+                node={reply}
+                depth={depth + 1}
+                onReplyPosted={onReplyPosted}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

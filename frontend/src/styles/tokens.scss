@@ -7,10 +7,10 @@
 // condition (`@media (max-width: var(--x))` isn't valid CSS — media features must
 // be literal at parse time), so breakpoints have to be a build-time SCSS value.
 //
-// Visual direction (Step 11 polish pass): Reddit-like comment UI — a muted,
-// mostly-grayscale palette with ONE accent (Reddit blue #0079d3) used sparingly
-// for links, the primary action, and the live indicator; compact spacing; thin
-// dividers and thread lines rather than heavy cards/shadows.
+// Visual direction (Step 13): full DARK theme, modelled on Reddit's dark mode
+// (see docs/reference-screenshots/). Layered near-black surfaces for depth,
+// light-gray text, one accent blue used sparingly, subtle gray thread
+// connectors + identicon avatars, and a small motion vocabulary.
 
 :root {
   // ─── Typography ──────────────────────────────────────────────────────────
@@ -35,46 +35,65 @@
   --font-lg: var(--font-size-lg) / var(--font-line-lg) var(--font-family-base);
   --font-xl: var(--font-size-xl) / var(--font-line-xl) var(--font-family-base);
 
-  // ─── Color (semantic) ────────────────────────────────────────────────────
-  // Warm-neutral grayscale — the UI is almost entirely these; color is the
-  // exception, not the rule.
-  --color-bg: #f6f7f8;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f5f6f7;
-  --color-border: #e3e5e8; // container / input outlines
-  --color-border-subtle: #edeef0; // internal dividers (table rows, etc.)
-  --color-text: #1a1a1b;
-  --color-text-muted: #6b6f76; // metadata (timestamps, counts, labels)
-  --color-hint: #9aa0a6; // placeholders, idle indicators
+  // ─── Color (semantic) — DARK ─────────────────────────────────────────────
+  // Three background layers for depth (page → surface → raised), not one flat
+  // black. Borders are low-contrast; text is light-gray, never pure white.
+  --color-bg: #0e1113; // page
+  --color-surface: #17191d; // cards, panels, the expanded-thread strip
+  --color-surface-muted: #212429; // hover fills, inset panels (preview, toolbar)
+  --color-border: #33373d; // input / container outlines — visible on dark
+  --color-border-subtle: #24272c; // internal dividers (table rows)
+  --color-text: #e2e4e7; // primary text
+  --color-text-muted: #9aa0a8; // timestamps, counts, labels
+  --color-hint: #6b7079; // placeholders, idle indicators
 
-  // Accent — Reddit blue. `-subtle` is the wash behind a ghost control on hover
-  // and the focus ring; `-contrast` is text on a filled accent surface.
-  --color-accent: #0079d3;
-  --color-accent-hover: #0060a8;
-  --color-accent-subtle: rgba(0, 121, 211, 0.09);
-  --color-accent-contrast: #ffffff;
+  // Accent — a brighter blue than the light theme's #0079d3, for legibility on
+  // near-black. `--color-link` is lighter still (best as body-text link colour);
+  // `-contrast` is dark, since text sits on the bright accent fill.
+  --color-accent: #4a9eea;
+  --color-accent-hover: #6bb2f0;
+  --color-accent-subtle: rgba(74, 158, 234, 0.16);
+  --color-accent-contrast: #0b1013;
+  --color-link: #74b8f7;
 
-  --color-danger: #d93a2b;
-  --color-danger-bg: #fdf1f0;
-  --color-danger-subtle: rgba(217, 58, 43, 0.09);
-  --color-success: #46a800; // the "Live" WebSocket dot
-  --color-success-bg: #f1fae9;
-  --color-warning: #d97706;
+  --color-danger: #f0655a;
+  --color-danger-bg: #2a1512;
+  --color-danger-subtle: rgba(240, 101, 90, 0.16);
+  --color-success: #4ec26e; // the "Live" WebSocket dot
+  --color-success-bg: #12241a;
+  --color-success-subtle: rgba(78, 194, 110, 0.22);
+  --color-warning: #e0a44a;
 
-  --color-link: var(--color-accent);
-  --color-code-bg: #f2f3f5;
+  --color-code-bg: #202329;
 
   // Interactive-surface states
-  --color-row-hover: #f5f6f7; // a comment/table row under the pointer
+  --color-row-hover: #1b1e22; // a comment/table row under the pointer
 
-  // Thread lines — the thin vertical rule marking each nesting level. Kept
-  // deliberately low-contrast; `-active` is for the hovered subtree.
-  --thread-line-color: #e0e2e5;
-  --thread-line-color-active: #b9bdc3;
+  // Thread connector lines — the gray graphic linking a comment to its replies
+  // (see CommentThread.module.scss). Must read on dark, so lighter than the
+  // light theme's value; `-active` is for the hovered subtree.
+  --thread-line-color: #474d57;
+  --thread-line-color-active: #6b7581;
+
+  // Skeleton shimmer — a faint light sweep, not a hard white one.
+  --skeleton-base: #202329;
+  --skeleton-highlight: rgba(255, 255, 255, 0.06);
+
+  // Lightbox scrim — the page is already dark, so this need not be near-opaque.
+  --overlay-scrim: rgba(0, 0, 0, 0.72);
+
+  // ─── Avatars + connectors (geometry) ─────────────────────────────────────
+  // Retuned for mobile on `.CommentThread` — keep every consumer reading these
+  // so the media query is a single place.
+  --avatar-size: 24px;
+  --connector-color: var(--thread-line-color);
+  --connector-gutter: var(--space-5); // reply indent per level (.repliesInner padding-left)
+  --connector-spine-x: 1px; // spine offset inside .repliesInner; .replies margin then
+                            // shifts the whole thing under the parent avatar centre
+  --connector-elbow-y: 16px; // avatar vertical centre inside a node
+  --connector-radius: 10px; // the curve where the spine turns into a reply
 
   // ─── Spacing scale ───────────────────────────────────────────────────────
-  // `--space-0` (2px) is new this pass — the dense comment layout needs a step
-  // below 4px for e.g. the gap between a comment's meta line and its body.
   --space-0: 2px;
   --space-1: 4px;
   --space-2: 8px;
@@ -84,18 +103,25 @@
   --space-6: 32px;
 
   // ─── Radius scale ────────────────────────────────────────────────────────
-  // Tightened this pass — Reddit's surfaces are barely rounded; only pills
-  // (buttons) are fully round.
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-pill: 999px;
 
   // ─── Shadow scale ────────────────────────────────────────────────────────
-  // Softened + reserved: `-sm` is a hairline lift for a floating panel; `-md`
-  // is only for true overlays (lightbox, toast). Cards use a border, not a shadow.
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.16);
+  // On dark, shadows barely register — deepen them so floating surfaces still
+  // separate. Cards still use a border, not a shadow.
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 10px 34px rgba(0, 0, 0, 0.6);
+
+  // ─── Motion ──────────────────────────────────────────────────────────────
+  // Small vocabulary; every animated component references these so a global
+  // `prefers-reduced-motion` override (globals.scss) can neutralise them.
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
   // ─── Z-index scale ───────────────────────────────────────────────────────
   --z-dropdown: 10;

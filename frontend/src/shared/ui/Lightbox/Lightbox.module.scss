@@ -5,9 +5,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.82);
+  background: var(--overlay-scrim);
   padding: var(--space-5);
   cursor: zoom-out;
+  animation: scrim-in var(--dur-base) var(--ease-out) backwards;
+
+  &.closing {
+    animation: scrim-out var(--dur-fast) var(--ease-in-out) forwards;
+  }
 }
 
 .image {
@@ -16,6 +21,11 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
   cursor: default;
+  animation: image-in var(--dur-base) var(--ease-out) backwards;
+
+  .closing & {
+    animation: image-out var(--dur-fast) var(--ease-in-out) forwards;
+  }
 }
 
 .close {
@@ -28,15 +38,42 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-pill);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.12);
   color: #fff;
   font-size: var(--font-size-lg);
   line-height: 1;
   cursor: pointer;
-  transition: background-color 0.12s ease;
+  transition: background-color var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out);
 
   &:hover {
-    background: rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.24);
+    transform: rotate(90deg);
+  }
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes scrim-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes image-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+@keyframes image-out {
+  to {
+    opacity: 0;
+    transform: scale(0.94);
   }
 }

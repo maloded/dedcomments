@@ -1764,3 +1764,135 @@ day 7-9 work:
   against the README.
 - **Demo video** — short screen recording of the deployed app, with a
   curated dataset.
+
+---
+
+### Step 13 — full dark theme, avatars, thread connector graphics, motion pass (done)
+
+A second visual refinement on top of Step 11's (light) Reddit-style pass —
+driven by real Reddit dark-mode reference screenshots the user supplied under
+`docs/reference-screenshots/` (dark post toolbar, a dark reply thread with
+avatars + curved connector lines, a dark sort dropdown). Used directly as the
+visual target. Scope was explicitly confirmed: switch the theme wholesale to
+dark (no toggle), keep the clickable-column sort (not Reddit's dropdown) but
+add icon + motion, and **no** voting UI (the reference shows vote arrows —
+there's no voting feature here, fake controls would mislead a reviewer).
+
+**Dark theme (`tokens.scss` + `globals.scss`)**
+- Palette redefined for dark: three background layers (`--color-bg #0e1113` →
+  `--color-surface #17191d` → `--color-surface-muted #212429`) for depth,
+  light-gray text (`--color-text #e2e4e7`, muted `#9aa0a8`), low-contrast
+  borders. Accent lightened to `#4a9eea` (was `#0079d3` — poor contrast on
+  near-black) with a separate lighter `--color-link #74b8f7` for body-text
+  links and a dark `--color-accent-contrast` (text sits on the bright fill).
+  Danger/success/warning re-toned; deeper shadows; `--color-code-bg`,
+  `--color-row-hover`, `--thread-line-color` (lighter — must read on dark).
+- New tokens: `--skeleton-base`/`--skeleton-highlight` (faint sweep, not hard
+  white), `--overlay-scrim` (0.72 — page is already dark), `--color-success-subtle`,
+  the `--avatar-size` + `--connector-*` geometry group, and a motion group
+  (`--dur-fast/base/slow`, `--ease-out`, `--ease-in-out`).
+- `globals.scss`: `html { color-scheme: dark }` (native controls/scrollbars),
+  and a single global `@media (prefers-reduced-motion: reduce)` that clamps
+  every `animation-duration`/`transition-duration` to 1ms (kept at 1ms, not 0,
+  so `animationend`/timer-driven unmounts still fire promptly).
+- Swept every component styled in Step 11; the few hardcoded colours found by
+  `grep` (Skeleton shimmer, Lightbox rgba, a form success border) were
+  tokenised. The CAPTCHA image keeps its own light background (baked into the
+  `svg-captcha` output server-side) — it reads fine as a small light chip on
+  dark, framed with a token border; not "broken".
+
+**Identicon avatars (`shared/lib/identicon.ts` + `shared/ui/Avatar`)**
+- Pure client-side, zero network: FNV-1a hash of `username + " " + email` →
+  a GitHub-style 5×5 symmetric grid rendered as an inline SVG `data:` URI.
+  Hue from the hash, fixed S/L tuned for the dark bg (muted dark fill + a
+  brighter same-hue foreground), pill-clipped to a circle. Deterministic —
+  same author always the same avatar.
+- Shown in `RootCommentsTable` (20px, next to the username) and
+  `CommentThreadNode` (`--avatar-size`, 24px desktop / 20px mobile, first on
+  the meta line — also the connector's anchor point).
+
+**Thread connector graphics (`CommentThread.module.scss`)**
+- Replaced the flat left-border-per-level with a Reddit-style connector: a
+  vertical **spine** under each comment's avatar centre (a stub on
+  `.body:has(~ .replies)` bridges avatar → replies, then `.repliesInner::before`
+  carries it down), and a rounded **elbow** per reply (`::before`,
+  `border-bottom` + `border-bottom-left-radius`) branching off the spine into
+  that reply's avatar. `:last-child::after` masks the spine below the final
+  elbow so it stops at the last reply.
+- All coordinates are `>= 0` inside `.repliesInner` on purpose — that element
+  needs `overflow: hidden` for the collapse animation, and negative offsets
+  would be clipped. The whole `.replies` block is then shifted left by
+  `calc(var(--avatar-size)/2 - var(--connector-spine-x))` to sit under the
+  parent avatar.
+- Geometry is 100% `--connector-*` custom properties; the mobile media query
+  retunes them (`--avatar-size`, `--connector-gutter`, `--connector-elbow-y`)
+  in one place. Works unchanged past the depth cap (`.indentCapped` just
+  shrinks the per-level indent; the connector still draws).
+- Hovering a node's `[–] collapse` toggle highlights *that node's* connector
+  (`--thread-line-color-active`) via a `:has()` scoped to the direct child —
+  no ancestor-chain bubbling.
+
+**Animations (plain CSS, no library)**
+- **Reply form**: slide/fade + `max-height` open on mount; `replyClosing`
+  swaps in the reverse keyframe, then a 200ms timer unmounts.
+- **Thread collapse/expand**: CSS grid `grid-template-rows: 1fr → 0fr`
+  transition on `.replies` (with `.repliesInner { overflow: hidden; min-height: 0 }`)
+  — the modern height-auto accordion; replies stay mounted, just clipped.
+- **Lightbox**: scrim fade-in + image scale-up on open; `.closing` plays the
+  reverse, then a 180ms timer calls `onClose`. Serves the brief's "visual
+  effects" for attachment viewing.
+- **Sort**: a chevron `<SortIcon>` per column — faint/muted when inactive,
+  accent + full-strength when active, `transform: rotate(180deg)` (transition)
+  between DESC/ASC, plus an animated `scaleX` underline on the active header.
+- **Hover micro-interactions**: `translateY(-1px)` on the primary button,
+  `scale(1.03)` on attachment thumbnails, row-hover colour transitions, a
+  90° close-button rotate, a pulsing "ping" ring on the live-connection dot.
+
+**Deviations (with reasons)**
+- **Reply-form / lightbox close use a `setTimeout`, not `onAnimationEnd`.**
+  `animationend` proved unreliable when swapping `animation-name` on an
+  element whose entrance animation had already finished (and stray child
+  animation events muddy it further). A duration-matched timer is predictable
+  and still correct under `prefers-reduced-motion` (the CSS is ~1ms, the
+  timer just briefly outlives it). Timers are cleared on unmount.
+- **Entrance animations use `animation-fill-mode: backwards`** (not `both`) —
+  `forwards` on an entrance can strand an element on its `from` frame if the
+  animation is interrupted; `backwards` gives a clean start and reverts to the
+  base (visible) style after.
+- **Collapse toggle moved from the meta line into the actions row** (`[–] collapse`
+  / `[+] N replies`) so the avatar is always first on the meta line — the
+  connector spine needs a predictable avatar x to align to.
+- **`grid-template-rows` transition** for collapse needs a fairly recent
+  browser (Chrome 107+, Firefox 129 / mid-2024, Safari 16+). Acceptable for a
+  modern-browser review; documented here.
+- The lightbox scrim renders semi-transparent in Playwright's **headless
+  screenshots** (computed `opacity: 1`, correct DOM) — same harness quirk noted
+  in Step 11, and here it also affects other entrance-animated overlays in
+  screenshots unless rAF is pumped first. Not a real-browser issue.
+
+**Verified** (full `docker compose up -d --build` stack, 1280px + 375px):
+dark theme reads consistently across the root table, an expanded 8-level
+thread, the form, the lightbox, and the moderator panel; identicon avatars
+are distinct and legible on dark; the connector spine/elbows align to avatars
+and still draw correctly at (and past) the depth cap without overlap; the
+CAPTCHA is legible; collapse / reply-open / reply-close / lightbox
+open-close / sort-icon-rotate all work and, with `prefers-reduced-motion:
+reduce` emulated, are clamped to ~1ms while every interaction still completes
+(collapse → `0px`, reply form unmounts, lightbox closes); no horizontal
+overflow at 375px (`scrollWidth === clientWidth`); **zero console errors**
+(the one pre-existing socket-reconnect *warning* and the React Compiler
+*info* on `CommentForm`'s `watch()` remain, unchanged). `tsc --noEmit` /
+`next build` / `eslint` all clean.
+
+**Pending — next** (unchanged in scope — the brief's "Delivery format" plus
+two housekeeping items):
+- **README** — what it is, implemented features, run-from-scratch steps.
+- **DB schema export for MySQL Workbench**.
+- **Moderator password rotation** — the dev creds (`moderator` /
+  `moderator-dev-password`) are in `.env.example`; a real one must be set
+  before deploy.
+- **Demo data curation** — the DB currently holds ~59 test/seed comments
+  (bulk pagination seed + the `Aurora` connector-demo thread); needs a
+  clean, curated set for the video.
+- **Deployment** to a VDS/cloud, then a from-a-clean-clone README check.
+- **Demo video**.

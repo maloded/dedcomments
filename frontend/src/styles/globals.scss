@@ -14,6 +14,12 @@ body {
   margin: 0;
 }
 
+html {
+  // Dark theme — makes native form controls, scrollbars and the default
+  // canvas dark to match. The app defines its own palette below/in tokens.scss.
+  color-scheme: dark;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-text);
@@ -55,5 +61,22 @@ img {
 
   @media (max-width: tokens.$breakpoint-mobile) {
     padding: var(--space-4) var(--space-3);
+  }
+}
+
+// Motion opt-out — one global switch. Every animated component uses transitions
+// / keyframe animations (never JS-driven motion), so neutralising both here
+// covers the whole app. Keeps a 1ms duration rather than 0 so `animationend` /
+// `transitionend` handlers (lightbox close, reply-form collapse) still fire.
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
   }
 }

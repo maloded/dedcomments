@@ -1,15 +1,32 @@
 @use "../../styles/tokens";
 
-// Reddit-style compact threading: tight vertical rhythm, de-emphasized metadata,
-// a thin low-contrast vertical rule per nesting level (carried on the `.replies`
-// wrapper so indentation accumulates *linearly* — a fixed step per level — and
-// caps cleanly on deep threads instead of running off-screen).
+// Reddit-style dark comment thread (see docs/reference-screenshots/):
+//   • identicon avatar on the meta line, body text indented to align past it
+//   • a gray connector graphic — a vertical spine under each comment's avatar,
+//     curving into each reply's avatar; the spine stops at the last reply
+//   • height-animated collapse (CSS grid 1fr → 0fr) and reply-form open/close
+//
+// Connector geometry is driven entirely by the `--connector-*` / `--avatar-size`
+// custom properties (defined in tokens.scss, retuned for mobile at the bottom of
+// this file), so there are no magic pixel values scattered through the rules.
 
 .CommentThread {
   padding: var(--space-3) var(--space-4);
+  animation: thread-in var(--dur-base) var(--ease-out) backwards;
 
   @media (max-width: tokens.$breakpoint-mobile) {
     padding: var(--space-3);
+    // one place to tighten the whole connector + avatar system on small screens
+    --avatar-size: 20px;
+    --connector-gutter: var(--space-4);
+    --connector-elbow-y: 14px;
+  }
+}
+
+@keyframes thread-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
   }
 }
 
@@ -28,18 +45,34 @@
 }
 
 .CommentThreadNode {
-  // Indentation and the thread line live on `.replies` below, not here — a node
-  // just stacks its own content.
-  &.root > .body {
-    padding-bottom: var(--space-1);
-  }
+  position: relative;
 }
 
 .body {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-1) 0;
+  padding: var(--space-1) 0 var(--space-2);
+
+  // The connector "stub": a short vertical line dropping from this comment's
+  // avatar into its replies region, so the spine (drawn from the top of
+  // `.repliesInner`) visually originates at the avatar rather than floating
+  // below the comment's own text/actions.
+  &:has(~ .replies)::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--avatar-size) / 2 - 1px);
+    top: calc(var(--space-1) + var(--avatar-size));
+    bottom: calc(-1 * var(--space-1));
+    width: 2px;
+    background: var(--connector-color);
+  }
+
+  // collapsed subtree — no dangling stub
+  &:has(~ .replies.collapsed)::after {
+    display: none;
+  }
 }
 
 .meta {
@@ -50,11 +83,9 @@
   color: var(--color-text-muted);
 }
 
-.collapseToggle {
-  min-width: 20px;
-  padding: 0 var(--space-1);
-  font-family: var(--font-family-mono);
-  font-weight: 700;
+.metaAvatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
 }
 
 .username {
@@ -62,7 +93,6 @@
   color: var(--color-text);
 }
 
-// A subtle dot separator between username and timestamp.
 .username::after {
   content: "·";
   margin-left: var(--space-2);
@@ -74,8 +104,7 @@
   color: var(--color-text-muted);
 }
 
-// Sits inline on the meta line, right after the timestamp — a moderator-only
-// affordance attached to the comment's author.
+// Moderator-only, inline on the meta line right after the timestamp.
 .banStatus {
   font: var(--font-xs);
   color: var(--color-danger);
@@ -88,11 +117,14 @@
 }
 
 .moderationError {
+  padding-left: calc(var(--avatar-size) + var(--space-2));
   font: var(--font-xs);
   color: var(--color-danger);
 }
 
+// Body text / attachment / actions align under the username, not the avatar.
 .text {
+  padding-left: calc(var(--avatar-size) + var(--space-2));
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--color-text);
@@ -112,6 +144,7 @@
 }
 
 .attachment {
+  padding-left: calc(var(--avatar-size) + var(--space-2));
   margin-top: var(--space-1);
 }
 
@@ -120,31 +153,144 @@
   align-items: center;
   gap: var(--space-1);
   margin-top: var(--space-0);
-  margin-left: calc(-1 * var(--space-1)); // align the first ghost button's label to the text edge
+  // the first ghost button carries space-2 of its own left padding, so starting
+  // the row at the avatar width lands its label under the body text
+  padding-left: var(--avatar-size);
+}
+
+.collapseToggle {
+  font-family: var(--font-family-mono);
+  font-weight: 700;
 }
 
 .replyForm {
+  padding-left: calc(var(--avatar-size) + var(--space-2));
   margin-top: var(--space-2);
-}
+  overflow: hidden;
+  animation: reply-open var(--dur-base) var(--ease-out) backwards;
 
-// The nesting container: one fixed indent step + the thread line per level.
-.replies {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  margin-left: var(--space-3);
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--thread-line-color);
-
-  @media (max-width: tokens.$breakpoint-mobile) {
-    margin-left: var(--space-1);
-    padding-left: var(--space-2);
+  // The CommentForm's <Card> (its single root div) — nudge it off the
+  // thread panel's own surface colour + hint the accent so an open reply
+  // box reads as "you're composing here".
+  > div {
+    background: var(--color-surface-muted);
+    border-color: var(--color-border);
   }
 }
 
-// Past the visual depth cap (CommentThreadNode.MAX_VISUAL_DEPTH) indentation
-// stops growing — the thread line stays so structure is still legible.
-.indentCapped {
-  margin-left: 0;
+.replyClosing {
+  animation: reply-close var(--dur-fast) var(--ease-in-out) forwards;
+}
+
+@keyframes reply-open {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 800px;
+  }
+}
+
+@keyframes reply-close {
+  from {
+    opacity: 1;
+    max-height: 800px;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+    max-height: 0;
+  }
+}
+
+// ─── The replies container + connector graphic ────────────────────────────
+.replies {
+  display: grid;
+  grid-template-rows: 1fr;
+  // shift right so the spine (drawn at --connector-spine-x inside .repliesInner)
+  // lands under this comment's avatar centre
+  margin-left: calc(var(--avatar-size) / 2 - var(--connector-spine-x));
+  transition: grid-template-rows var(--dur-base) var(--ease-out);
+}
+
+.collapsed {
+  grid-template-rows: 0fr;
+}
+
+.repliesInner {
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  padding-left: var(--connector-gutter);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+
+  // the vertical spine — runs the full height of the replies block
+  &::before {
+    content: "";
+    position: absolute;
+    left: var(--connector-spine-x);
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--connector-color);
+  }
+}
+
+// Each reply: a curved elbow branching off the spine into its avatar. Only a
+// bottom border + corner radius — the vertical run is the spine itself, so the
+// two never double up. All coordinates are >= 0 within .repliesInner, so
+// `overflow: hidden` (needed for the collapse animation) never clips them.
+.repliesInner > .CommentThreadNode {
+  &::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-spine-x) - var(--connector-gutter));
+    top: 0;
+    width: calc(var(--connector-gutter) - var(--connector-spine-x));
+    height: var(--connector-elbow-y);
+    border-bottom: 2px solid var(--connector-color);
+    border-bottom-left-radius: var(--connector-radius);
+  }
+
+  // last reply: mask the spine below this elbow so it doesn't run past the
+  // final avatar (matches the expanded-thread panel background)
+  &:last-child::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-spine-x) - var(--connector-gutter));
+    top: var(--connector-elbow-y);
+    height: calc(100% - var(--connector-elbow-y));
+    width: 3px;
+    background: var(--color-surface);
+  }
+}
+
+.repliesInner::before,
+.repliesInner > .CommentThreadNode::before,
+.repliesInner > .CommentThreadNode:last-child::after {
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+// Hovering a node's collapse toggle lights up the connector for *its* replies
+// only (no ancestor-chain bubbling — the `:has()` is scoped to the direct child).
+.CommentThreadNode:has(> .body .collapseToggle:hover) {
+  > .replies .repliesInner::before {
+    background: var(--thread-line-color-active);
+  }
+
+  > .replies .repliesInner > .CommentThreadNode::before {
+    border-color: var(--thread-line-color-active);
+  }
+}
+
+// Past the visual depth cap: keep the avatar-aligned spine, just tighten the
+// per-level indent so deep threads don't run off screen.
+.indentCapped .repliesInner {
+  padding-left: var(--space-4);
 }
