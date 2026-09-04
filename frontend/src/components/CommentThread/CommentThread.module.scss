@@ -16,10 +16,18 @@
 
   @media (max-width: tokens.$breakpoint-mobile) {
     padding: var(--space-3);
-    // one place to tighten the whole connector + avatar system on small screens
+    // One place to tighten the whole connector + avatar system on small screens.
+    // `--connector-x`/`--connector-elbow-y` must be redeclared here too, not just
+    // `--avatar-size` — a custom property's `var()` references are substituted
+    // once, using the cascade where *that property* is declared, so the
+    // `calc(var(--avatar-size) / 2)` in tokens.scss's `:root` rule stays baked to
+    // the desktop 24px and doesn't react to this override on its own (a real,
+    // if harmless-looking, instance of the same "compute once, drifts on
+    // descendants" class of bug as the drift fix above).
     --avatar-size: 20px;
     --connector-gutter: var(--space-4);
-    --connector-elbow-y: 14px;
+    --connector-x: calc(var(--avatar-size) / 2);
+    --connector-elbow-y: calc(var(--space-1) + var(--avatar-size) / 2);
   }
 }
 
@@ -58,11 +66,12 @@
   // The connector "stub": a short vertical line dropping from this comment's
   // avatar into its replies region, so the spine (drawn from the top of
   // `.repliesInner`) visually originates at the avatar rather than floating
-  // below the comment's own text/actions.
+  // below the comment's own text/actions. Same `--connector-x` anchor as the
+  // spine, so they're always colinear.
   &:has(~ .replies)::after {
     content: "";
     position: absolute;
-    left: calc(var(--avatar-size) / 2 - 1px);
+    left: calc(var(--connector-x) - 1px);
     top: calc(var(--space-1) + var(--avatar-size));
     bottom: calc(-1 * var(--space-1));
     width: 2px;
@@ -208,12 +217,15 @@
 }
 
 // ─── The replies container + connector graphic ────────────────────────────
+// The per-level indent is `--connector-gutter`, applied ONCE as `.repliesInner`'s
+// padding — `.replies` itself has no horizontal offset. So `.repliesInner`'s left
+// edge is exactly this comment's own node-left, and every connector piece below
+// is `--connector-x` from that same edge → the spine, its children's elbows and
+// the collapse stub are always colinear, at every depth, with no accumulating
+// rounded-offset chain (the drift bug this replaces).
 .replies {
   display: grid;
   grid-template-rows: 1fr;
-  // shift right so the spine (drawn at --connector-spine-x inside .repliesInner)
-  // lands under this comment's avatar centre
-  margin-left: calc(var(--avatar-size) / 2 - var(--connector-spine-x));
   transition: grid-template-rows var(--dur-base) var(--ease-out);
 }
 
@@ -230,11 +242,12 @@
   flex-direction: column;
   gap: var(--space-3);
 
-  // the vertical spine — runs the full height of the replies block
+  // the vertical spine — centred on this comment's avatar, full height of the
+  // replies block
   &::before {
     content: "";
     position: absolute;
-    left: var(--connector-spine-x);
+    left: calc(var(--connector-x) - 1px);
     top: 0;
     bottom: 0;
     width: 2px;
@@ -242,17 +255,19 @@
   }
 }
 
-// Each reply: a curved elbow branching off the spine into its avatar. Only a
-// bottom border + corner radius — the vertical run is the spine itself, so the
-// two never double up. All coordinates are >= 0 within .repliesInner, so
-// `overflow: hidden` (needed for the collapse animation) never clips them.
+// Each reply: a curved elbow branching off the spine and running to its own
+// avatar's centre (it's drawn before `.body` in the box tree, so it tucks
+// behind the avatar rather than over it). Left edge sits exactly on the spine
+// (`--connector-x - 1px`, same as `.repliesInner::before`). All x stays >= 0
+// inside `.repliesInner`, so `overflow: hidden` (needed for the collapse
+// animation) never clips it.
 .repliesInner > .CommentThreadNode {
   &::before {
     content: "";
     position: absolute;
-    left: calc(var(--connector-spine-x) - var(--connector-gutter));
+    left: calc(var(--connector-x) - 1px - var(--connector-gutter));
     top: 0;
-    width: calc(var(--connector-gutter) - var(--connector-spine-x));
+    width: var(--connector-gutter);
     height: var(--connector-elbow-y);
     border-bottom: 2px solid var(--connector-color);
     border-bottom-left-radius: var(--connector-radius);
@@ -263,10 +278,10 @@
   &:last-child::after {
     content: "";
     position: absolute;
-    left: calc(var(--connector-spine-x) - var(--connector-gutter));
+    left: calc(var(--connector-x) - 1px - var(--connector-gutter));
     top: var(--connector-elbow-y);
     height: calc(100% - var(--connector-elbow-y));
-    width: 3px;
+    width: 4px;
     background: var(--color-surface);
   }
 }

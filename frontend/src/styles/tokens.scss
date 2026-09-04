@@ -83,14 +83,19 @@
   --overlay-scrim: rgba(0, 0, 0, 0.72);
 
   // ─── Avatars + connectors (geometry) ─────────────────────────────────────
-  // Retuned for mobile on `.CommentThread` — keep every consumer reading these
-  // so the media query is a single place.
+  // Retuned for mobile on `.CommentThread` — only `--avatar-size` and
+  // `--connector-gutter` change there; everything else recomputes from them.
   --avatar-size: 24px;
   --connector-color: var(--thread-line-color);
+  // `--connector-x` is THE single horizontal anchor for the whole connector
+  // graphic (spine, elbow, stub, mask all measure from it) — an avatar's centre
+  // offset from its node's left edge. The per-level indent is `--connector-gutter`
+  // applied *once* (as `.repliesInner` padding); nothing else offsets the
+  // connector, so there's no rounded-offset chain to accumulate drift across
+  // nesting levels.
+  --connector-x: calc(var(--avatar-size) / 2);
   --connector-gutter: var(--space-5); // reply indent per level (.repliesInner padding-left)
-  --connector-spine-x: 1px; // spine offset inside .repliesInner; .replies margin then
-                            // shifts the whole thing under the parent avatar centre
-  --connector-elbow-y: 16px; // avatar vertical centre inside a node
+  --connector-elbow-y: calc(var(--space-1) + var(--avatar-size) / 2); // avatar vertical centre in a node
   --connector-radius: 10px; // the curve where the spine turns into a reply
 
   // ─── Spacing scale ───────────────────────────────────────────────────────

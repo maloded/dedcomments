@@ -1896,3 +1896,79 @@ two housekeeping items):
   clean, curated set for the video.
 - **Deployment** to a VDS/cloud, then a from-a-clean-clone README check.
 - **Demo video**.
+
+---
+
+### Post-Step-13 bug fix — connector-line drift at deeper nesting levels (done)
+
+Found via manual review of a real multi-level thread (the `Aurora` thread from
+Step 13, 5+ levels deep) — screenshotted at the user's actual display scale
+(not 1x), where it was visible that each level's connector spine/elbow sat
+increasingly off-centre from its avatar the deeper the thread went.
+
+**Root cause — two separate things, both in the "geometry built from an
+accumulating chain of small offsets" family Step 13's own write-up warned
+about**:
+
+1. **The real drift**: `.replies` carried `margin-left: calc(var(--avatar-size)/2
+   - var(--connector-spine-x))` (11px) *in addition to* `.repliesInner`'s
+   `padding-left: var(--connector-gutter)` (24px) — two roundable offsets
+   applied per nesting level. At an integer device-pixel ratio (Playwright's
+   default) both offsets snap cleanly and `getBoundingClientRect()` shows zero
+   error, which is why Step 13's own verification (run only at DPR 1) missed
+   it. At the fractional DPRs real displays commonly use (1.25/1.5x — confirmed
+   by reproducing with `deviceScaleFactor: 1.5`), the 11px offset (16.5 device
+   px) has to round on every level, while the avatar's own position is offset
+   by a *different* accumulating rounding path. The two chains diverge a little
+   more each level → the "cumulative drift" the user described.
+2. **A second, smaller bug found while fixing the first**: `--connector-x`
+   and `--connector-elbow-y` (introduced this fix, see below) are declared once
+   in `tokens.scss` as `calc(var(--avatar-size) / 2)` / `calc(var(--space-1) +
+   var(--avatar-size) / 2)`. A custom property's `var()` references are
+   substituted using the cascade *where that property is declared* — since
+   they're declared on `:root`, they permanently bake in `:root`'s
+   `--avatar-size` (24px), and don't recompute just because a descendant
+   (`.CommentThread`'s mobile media query) redeclares `--avatar-size: 20px`.
+   Result: the mobile connector geometry silently kept using the desktop
+   avatar radius, a flat +2px offset at every level (not accumulating, but
+   still wrong).
+
+**Fix**:
+- Removed `.replies`'s `margin-left` entirely. The per-level indent is now
+  applied exactly once, as `.repliesInner`'s `padding-left`.
+- Introduced a single custom property, `--connector-x` (`avatar-size / 2`),
+  as *the* horizontal anchor for the whole connector graphic — the spine,
+  every elbow, the collapse stub, and the last-child mask all position
+  themselves from it, all relative to boxes that share the same node-left
+  origin. There is now exactly one offset (`--connector-gutter`, a plain
+  value with no rounding-prone subtraction) between one level and the next,
+  instead of two.
+- The elbow now runs all the way to the child's avatar *centre* (previously
+  it stopped at the avatar's left edge, ~12px short) — safe because
+  `.CommentThreadNode::before` is earlier in box-tree order than `.body`, so
+  it paints underneath the avatar rather than over it; the line now visibly
+  tucks behind each avatar instead of pointing at its edge.
+- Fixed the `--connector-x`/`--connector-elbow-y` staleness by redeclaring
+  both inside `.CommentThread`'s mobile media query, alongside `--avatar-size`
+  and `--connector-gutter`, so they rebake correctly for that subtree.
+- Net effect: indentation per level dropped from 35px to 24px (desktop) — a
+  side benefit, not the goal; the graphic reads tighter and closer to the
+  Reddit reference now that the redundant `.replies` offset is gone.
+
+**Verified** (full `docker compose up -d --build` stack): rebuilt the 8-level
+`Aurora` connector-demo thread from Step 13. Measured `spine-centre −
+avatar-centre` in the browser at every level (1 through 6, plus the
+depth-capped 7th) at `deviceScaleFactor` 1, 1.25, 1.5, and 2 — **0px delta at
+every level, at every scale factor**, both desktop (1280px) and mobile
+(375px). Re-measured after collapsing and re-expanding a mid-thread subtree
+(`bornholm`) — deltas stayed at 0, confirming the alignment isn't
+render-path-dependent. Reproduced the original bug first (confirmed non-zero,
+per-level-constant-but-visually-compounding drift at DPR 1.5 on the
+pre-fix code, worst at delacroix/Esme/fenwick — levels 2-4) so the fix is
+verified against an actual reproduction, not just re-derived math. No
+horizontal overflow at 375px. Zero console errors. `tsc --noEmit` / `next
+build` / `eslint` clean.
+
+**Deviation**: none beyond the `--connector-x`/`--connector-elbow-y`
+media-query fix bundled in, since it's the same root cause class and was
+found while fixing the reported issue in the same file.
