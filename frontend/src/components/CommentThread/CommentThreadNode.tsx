@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { useMutation } from "@apollo/client/react";
 import { CombinedGraphQLErrors } from "@apollo/client/errors";
 import { Button } from "@/shared/ui/Button";
@@ -78,8 +78,11 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
   const [hideCommentMutation, { loading: hiding }] = useMutation(HideCommentDocument);
   const [banAuthorMutation, { loading: banning }] = useMutation(BanAuthorDocument);
 
-  const visualDepth = Math.min(depth, MAX_VISUAL_DEPTH);
   const hasReplies = node.replies.length > 0;
+  // Past this depth the nesting container stops adding indent (the thread line
+  // stays) so deep threads don't march off the right edge — see
+  // CommentThread.module.scss `.indentCapped`.
+  const indentCapped = depth >= MAX_VISUAL_DEPTH;
 
   async function handleHide() {
     if (!session) return;
@@ -123,16 +126,8 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
     }
   }
 
-  // `--depth` drives the indent in CSS (`calc(var(--depth) * var(--space-N))`)
-  // — a per-instance value CSS Modules can't express as a static class, same
-  // pattern as `Skeleton`'s inline `width`/`height`.
-  const style = { "--depth": visualDepth } as CSSProperties;
-
   return (
-    <div
-      className={classNames(cls.CommentThreadNode, { [cls.root]: depth === 0 })}
-      style={style}
-    >
+    <div className={classNames(cls.CommentThreadNode, { [cls.root]: depth === 0 })}>
       <div className={cls.body}>
         <div className={cls.meta}>
           {hasReplies && (
@@ -204,7 +199,7 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
       </div>
 
       {!collapsed && hasReplies && (
-        <div className={cls.replies}>
+        <div className={classNames(cls.replies, { [cls.indentCapped]: indentCapped })}>
           {node.replies.map((reply) => (
             <CommentThreadNode
               key={reply.id}

@@ -2,13 +2,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   cursor: pointer;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
   font: var(--font-sm);
   font-weight: 600;
-  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease,
+    opacity 0.12s ease;
 
   &:disabled {
     cursor: not-allowed;
@@ -19,6 +21,8 @@
 // ─── size ────────────────────────────────────────────────────────────────
 .sm {
   padding: var(--space-1) var(--space-2);
+  font: var(--font-xs);
+  font-weight: 700;
 }
 
 .md {
@@ -26,6 +30,7 @@
 }
 
 // ─── variant × color ─────────────────────────────────────────────────────
+// filled — the one prominent action per view (Post comment, Log in). Accent fill.
 .filled {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
@@ -38,19 +43,22 @@
     background: var(--color-danger);
 
     &:not(:disabled):hover {
-      opacity: 0.85;
+      background: var(--color-danger);
+      opacity: 0.88;
     }
   }
 }
 
+// outline — secondary pill (pagination, tag toolbar). Quiet until hovered.
 .outline {
   background: var(--color-surface);
   border-color: var(--color-border);
-  color: var(--color-text);
+  color: var(--color-text-muted);
 
   &:not(:disabled):hover {
     border-color: var(--color-accent);
     color: var(--color-accent);
+    background: var(--color-accent-subtle);
   }
 
   &.danger {
@@ -58,22 +66,33 @@
 
     &:not(:disabled):hover {
       border-color: var(--color-danger);
+      color: var(--color-danger);
+      background: var(--color-danger-subtle);
     }
   }
 }
 
+// clear — the Reddit-style lightweight action (Reply, Hide, Ban, Expand,
+// Remove). Muted-gray text that only gains a soft rounded background on hover.
 .clear {
   background: none;
   border-color: transparent;
-  color: var(--color-text);
-  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  padding: var(--space-1) var(--space-2);
 
   &:not(:disabled):hover {
-    color: var(--color-accent);
+    background: var(--color-surface-muted);
+    color: var(--color-text);
   }
 
   &.danger {
     color: var(--color-danger);
+
+    &:not(:disabled):hover {
+      background: var(--color-danger-subtle);
+      color: var(--color-danger);
+    }
   }
 }
 

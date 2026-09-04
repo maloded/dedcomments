@@ -568,6 +568,7 @@ export function CommentForm(props: CommentFormProps) {
         <Button
           type="submit"
           variant="filled"
+          className={cls.submit}
           disabled={
             isSubmitting || captchaLoading || attachmentUploading || Boolean(pollingAttachmentId)
           }

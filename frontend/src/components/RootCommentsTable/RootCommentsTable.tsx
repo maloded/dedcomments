@@ -145,11 +145,17 @@ export function RootCommentsTable() {
                 return (
                   <Fragment key={item.id}>
                     <tr>
-                      <td>{item.author.username}</td>
-                      <td>{item.author.email}</td>
-                      <td>{formatDate(item.createdAt)}</td>
-                      <td>{item.repliesCount}</td>
-                      <td>
+                      <td className={cls.username}>{item.author.username}</td>
+                      <td className={cls.email} data-label="Email">
+                        {item.author.email}
+                      </td>
+                      <td className={cls.date} data-label="Date">
+                        {formatDate(item.createdAt)}
+                      </td>
+                      <td className={cls.replies} data-label="Replies">
+                        {item.repliesCount}
+                      </td>
+                      <td className={cls.expandCell}>
                         <Button
                           size="sm"
                           variant="clear"

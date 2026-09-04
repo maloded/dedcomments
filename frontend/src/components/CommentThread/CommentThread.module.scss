@@ -1,13 +1,16 @@
 @use "../../styles/tokens";
 
-// Deliberately minimal this pass (CLAUDE.md → this step's "styling scope" note):
-// just enough spacing/borders to make the tree readable and testable. A dedicated
-// visual pass (Reddit-like compact threading) is tracked as pending.
+// Reddit-style compact threading: tight vertical rhythm, de-emphasized metadata,
+// a thin low-contrast vertical rule per nesting level (carried on the `.replies`
+// wrapper so indentation accumulates *linearly* — a fixed step per level — and
+// caps cleanly on deep threads instead of running off-screen).
 
 .CommentThread {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+
+  @media (max-width: tokens.$breakpoint-mobile) {
+    padding: var(--space-3);
+  }
 }
 
 .loading {
@@ -21,32 +24,14 @@
   color: var(--color-danger);
   margin: 0;
   padding: var(--space-4);
+  font: var(--font-sm);
 }
 
 .CommentThreadNode {
-  // `--depth` is set inline per node (see CommentThreadNode.tsx); capped at 6
-  // here too as a second line of defense, and reduced further + tightened on
-  // mobile below.
-  margin-left: calc(min(var(--depth), 6) * var(--space-3));
-
-  @media (max-width: tokens.$breakpoint-mobile) {
-    margin-left: calc(min(var(--depth), 4) * var(--space-2));
-  }
-
-  // The "thread line" — every level but the root gets a left border instead of
-  // relying on margin alone for deep threads, per CLAUDE.md → "Tree rendering
-  // on the frontend".
-  &:not(.root) {
-    border-left: 2px solid var(--color-border);
-    padding-left: var(--space-3);
-
-    @media (max-width: tokens.$breakpoint-mobile) {
-      padding-left: var(--space-2);
-    }
-  }
-
-  & + & {
-    margin-top: var(--space-3);
+  // Indentation and the thread line live on `.replies` below, not here — a node
+  // just stacks its own content.
+  &.root > .body {
+    padding-bottom: var(--space-1);
   }
 }
 
@@ -54,33 +39,52 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  padding: var(--space-1) 0;
 }
 
 .meta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font: var(--font-sm);
+  font: var(--font-xs);
+  color: var(--color-text-muted);
 }
 
 .collapseToggle {
-  min-width: 28px;
-  justify-content: center;
+  min-width: 20px;
+  padding: 0 var(--space-1);
+  font-family: var(--font-family-mono);
+  font-weight: 700;
 }
 
 .username {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--color-text);
+}
+
+// A subtle dot separator between username and timestamp.
+.username::after {
+  content: "·";
+  margin-left: var(--space-2);
+  color: var(--color-hint);
+  font-weight: 400;
 }
 
 .date {
   color: var(--color-text-muted);
 }
 
+// Sits inline on the meta line, right after the timestamp — a moderator-only
+// affordance attached to the comment's author.
 .banStatus {
   font: var(--font-xs);
   color: var(--color-danger);
-  margin-left: auto;
+
+  &::before {
+    content: "·";
+    margin-right: var(--space-2);
+    color: var(--color-hint);
+  }
 }
 
 .moderationError {
@@ -92,12 +96,18 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--color-text);
+  font: var(--font-sm);
+
+  a {
+    color: var(--color-link);
+  }
 
   :global(code) {
     background: var(--color-code-bg);
     border-radius: var(--radius-sm);
     padding: 0 var(--space-1);
     font-family: var(--font-family-mono);
+    font-size: 0.9em;
   }
 }
 
@@ -107,16 +117,34 @@
 
 .actions {
   display: flex;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-0);
+  margin-left: calc(-1 * var(--space-1)); // align the first ghost button's label to the text edge
 }
 
 .replyForm {
   margin-top: var(--space-2);
 }
 
+// The nesting container: one fixed indent step + the thread line per level.
 .replies {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--thread-line-color);
+
+  @media (max-width: tokens.$breakpoint-mobile) {
+    margin-left: var(--space-1);
+    padding-left: var(--space-2);
+  }
+}
+
+// Past the visual depth cap (CommentThreadNode.MAX_VISUAL_DEPTH) indentation
+// stops growing — the thread line stays so structure is still legible.
+.indentCapped {
+  margin-left: 0;
 }

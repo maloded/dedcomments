@@ -7,22 +7,40 @@
   cursor: zoom-in;
   overflow: hidden;
   line-height: 0;
+  transition: border-color 0.12s ease;
+
+  &:hover {
+    border-color: var(--color-accent);
+  }
 }
 
 .thumbnail {
   display: block;
-  max-width: 160px;
-  max-height: 120px;
+  max-width: 140px;
+  max-height: 105px;
 }
 
+// Text attachment — a compact chip, not a bare underline.
 .fileLink {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  color: var(--color-link);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font: var(--font-xs);
+  font-weight: 600;
   text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 
   &:hover {
-    text-decoration: underline;
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    text-decoration: none;
   }
 }

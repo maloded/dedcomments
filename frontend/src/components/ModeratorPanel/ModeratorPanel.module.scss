@@ -4,11 +4,12 @@
   padding: 0;
   color: var(--color-text-muted);
   font: var(--font-xs);
-  text-decoration: underline;
+  font-weight: 600;
   cursor: pointer;
 
   &:hover {
     color: var(--color-accent);
+    text-decoration: underline;
   }
 }
 
@@ -20,15 +21,17 @@
 
 .loggedInAs {
   font: var(--font-xs);
+  font-weight: 600;
   color: var(--color-text-muted);
 }
 
 .loginCard {
   position: absolute;
   right: 0;
-  top: 100%;
+  top: calc(100% + var(--space-2));
   z-index: var(--z-dropdown);
-  width: 220px;
+  width: 240px;
+  box-shadow: var(--shadow-md);
 }
 
 .form {
@@ -42,11 +45,18 @@
   padding: var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px var(--color-accent-subtle);
+  }
 }
 
 .formActions {
   display: flex;
   gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .error {

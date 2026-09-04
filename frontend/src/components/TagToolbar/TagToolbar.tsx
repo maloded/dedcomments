@@ -32,6 +32,7 @@ export function TagToolbar(props: TagToolbarProps) {
           type="button"
           size="sm"
           variant="outline"
+          className={cls.btn}
           disabled={disabled}
           title={title}
           onClick={() => onWrap(tag)}
@@ -43,6 +44,7 @@ export function TagToolbar(props: TagToolbarProps) {
         type="button"
         size="sm"
         variant="outline"
+        className={cls.btn}
         disabled={disabled}
         title='Link — <a href="" title="">'
         onClick={onInsertLink}

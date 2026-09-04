@@ -1566,3 +1566,128 @@ WebSocket propagation for creates, hides, *and* bans — is functionally
 complete. Deployment, README, the MySQL Workbench schema file, and the demo
 video (the brief's "Delivery format" section) remain the real outstanding
 milestones.
+
+---
+
+### Step 11 — Reddit-inspired visual polish pass (done)
+
+Closes the long-deferred styling item (deliberately deferred across Steps
+6-10, every frontend session so far having stayed functional-only). A pure
+CSS/SCSS-Modules pass over **every** component built to date — no changes to
+component logic, data flow, or GraphQL operations; the only `.tsx` edits are
+class-name hooks and `data-label` attributes that exist solely to support the
+styling (plus dropping one now-unused inline-style var in `CommentThreadNode`
+— see below).
+
+Two aesthetic calls were put to the user up front:
+- **Accent colour → Reddit blue (`#0079d3`)** for the single sparingly-used
+  accent (links, the primary Post/Log-in button, the "Live" indicator green
+  stays green). Not Reddit's classic orange — a hot colour even used sparingly
+  competes with the red of Hide/Ban.
+- **Timestamps stay absolute** (`Sep 4, 2026, 1:26 PM`), just restyled
+  smaller/muted — keeps this a strictly CSS pass (relative "5h ago" would have
+  meant a date-format helper).
+
+**`styles/tokens.scss` — refined, not rewritten**
+- Palette pulled toward warm-neutral grayscale: softer `--color-bg`/borders,
+  a new `--color-border-subtle` for internal dividers, `--color-row-hover`,
+  `--color-accent-subtle` / `--color-danger-subtle` (the wash behind a ghost
+  control on hover + focus rings), `--thread-line-color` /
+  `--thread-line-color-active`.
+- `--space-0: 2px` added — the dense comment layout needed a step below 4px.
+- Radii tightened (`--radius-md` 8→6, `--radius-lg` 12→8); shadows softened
+  and reserved (cards now use a border, not a shadow); type scale nudged down
+  (`--font-size-md` 16→15, `--font-size-xl` 28→22).
+
+**`shared/ui` primitives**
+- **Button**: all variants are pills now. `filled` = the one prominent
+  accent action per view; `outline` = quiet secondary (pagination, tag
+  toolbar); `clear` = the Reddit-style lightweight action — muted-grey text
+  that only gains a soft rounded background on hover (Reply/Hide/Ban/Expand/
+  Remove all use this).
+- **Card**: border only, no shadow.
+- **Skeleton**: shimmer colours already token-based; left as-is.
+- **Lightbox**: darker backdrop (`rgba(0,0,0,0.82)`), subtle bordered close
+  affordance.
+
+**Comment-domain components**
+- **RootCommentsTable**: kept as a real `<table>` (the brief says "in a
+  table, sortable by …" — semantics + the sort affordance matter), but
+  restyled to read as a compact scannable list: no outer box, no vertical
+  rules, thin row dividers, a slim uppercase sort header with the active
+  column in accent. **Below `$breakpoint-mobile` the same `<table>` collapses
+  to stacked rows** (classic responsive-table pattern via `display: block` +
+  `data-label` pseudo-content, sortable headers kept as a slim "sort by" bar
+  using `th:not(:has(.sortButton))` to drop the non-sort columns) — five
+  columns never force a horizontal scroll on a phone. Also fixed a latent
+  flex bug: the scroll wrapper lacked `min-width: 0`, so on a narrow viewport
+  the table stretched the page instead of scrolling inside its own box.
+- **CommentThread / CommentThreadNode**: the centrepiece. The thread line +
+  indentation moved off the individual node onto the `.replies` wrapper, so
+  indentation now accumulates **linearly** (a fixed step per level) and caps
+  cleanly (`.indentCapped`, driven by `depth >= MAX_VISUAL_DEPTH`) instead of
+  the old per-node `depth * step` margin that compounded triangularly and
+  never actually stopped growing past the "cap". Thin low-contrast grey line
+  per level; compact vertical rhythm; de-emphasised meta line (small, muted,
+  `username · timestamp`); Reply/Hide as small muted ghost buttons below the
+  text; Ban author inline on the meta line right after the timestamp
+  (moderator-only). The expanded thread panel gets a white surface + a 2px
+  accent bar on its left edge as a "you are here" marker. Removed the
+  now-dead `--depth` inline custom property and its `CSSProperties` import.
+- **CommentForm + TagToolbar**: compact toolbar in a small inset container,
+  monospace glyph buttons; inputs get an accent focus ring; the live preview
+  now reads as *output* — a solid tinted panel (was a dashed box) with an
+  empty-state hint; the file input's `::file-selector-button` restyled to a
+  pill; Post button is a left-aligned accent pill (was full-width).
+- **AttachmentPreview**: smaller contained thumbnail (140×105) with an accent
+  hover border; text attachment is a compact pill/chip, not a bare underline.
+- **ModeratorPanel / ConnectionStatusIndicator / Toast**: unchanged in intent
+  — small, muted, corner/inline. Login card gets a real drop shadow + focus
+  rings; toast is a rounded pill with a short slide-in.
+- **globals.scss**: narrower content column (860→820), a shared
+  `:focus-visible` ring, `a` underline-on-hover, mobile page padding.
+
+**Deviations**
+- RootCommentsTable kept its `<table>` element (did *not* restructure to a
+  `<ul>`/`<div>` list) — the brief explicitly frames the root view as a
+  sortable table, and the responsive-collapse pattern gives the compact
+  list *look* on mobile without giving up table semantics or the a11y of
+  real `<th scope>` sort controls.
+- Three `.tsx` files gained styling-only hooks: `data-label` attrs +
+  `.expandCell`/column classes on `RootCommentsTable` rows, `.btn` on
+  `TagToolbar` buttons, `.submit` on the form button, and the
+  `.indentCapped` class toggle on `CommentThreadNode`'s `.replies`. No
+  behavioural change.
+- The lightbox backdrop renders semi-transparent in Playwright's headless
+  screenshots despite a computed `rgba(0,0,0,0.82)` and correct DOM
+  stacking — confirmed a screenshot-compositing quirk (computed style +
+  `elementFromPoint` both correct), not a real bug.
+
+**Verified manually** (full `docker compose up -d --build` stack — backend
+container running, frontend run via `next dev` on :3000 so CORS'
+`ALLOWED_ORIGIN=http://localhost:3000` is satisfied — seeded a fresh
+4-level thread + an image attachment + a couple of `<code>`/`<strong>`
+roots): root table, an expanded 4-level thread (LIFO order intact, thread
+lines + linear indentation, image thumbnail), the live preview rendering
+bold/italic/code/link, the lightbox, inline reply, and the moderator panel
+(login → Hide/Ban buttons appear, styled as red ghost actions) all checked
+at 1280px desktop **and** 375px mobile. `document.documentElement.scrollWidth
+=== clientWidth` at 375px (no horizontal overflow anywhere). Zero console
+errors; the one pre-existing socket reconnect *warning* and the one
+pre-existing React Compiler *info* on `CommentForm`'s `watch()` are the only
+console output, unchanged from prior steps.
+
+**Verified — build/lint**: `tsc --noEmit`, `next build`, `eslint` all clean
+(the single pre-existing React Compiler info-warning on `CommentForm`'s
+`watch()`, same as Steps 6-10). No backend changes this step; backend test
+suite untouched.
+
+**Pending — next**:
+- **Pagination self-check with real multi-page data** — still open (six
+  sessions now): Prev/Next across a real 26+-comment second page has only
+  ever been verified structurally. Deferred to the pre-submission pass, when
+  the DB gets seeded for the demo video.
+- **README, DB-schema export for MySQL Workbench, deployment to a VDS/cloud,
+  demo video** — the brief's "Delivery format" section. With the visual pass
+  done, the app is feature- *and* polish-complete; these delivery artefacts
+  are all that remain.
