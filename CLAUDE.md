@@ -2837,3 +2837,79 @@ rather than silently ignored, in case it recurs somewhere more visible.
 **Pending — unchanged otherwise**: README, DB schema export for MySQL
 Workbench, moderator password rotation, demo data curation, deployment, and
 the demo video.
+
+---
+
+### Step 19 — README.md and MySQL Workbench DB schema export (done)
+
+Pure delivery/documentation work — no application code changed. Closes two
+of the brief's "Delivery format" items.
+
+**`README.md` (project root)** — comprehensive, organized for a reviewer
+opening the repo cold: what the project is, a feature overview mapped
+directly onto the brief's own tiers (base requirements / Junior+ / Middle /
+beyond-brief polish) so a reviewer can check requirements off against
+implementation, the actual tech stack (cross-checked against this Progress
+log for real deviations — base64 attachment upload instead of multipart,
+SCSS Modules instead of Tailwind, no shared npm workspace, SSR opted out of
+— rather than restating the original plan), an architecture overview
+(monorepo layout, the Author/Comment/Attachment/Moderator domain model, and
+short "why RabbitMQ" / "why WebSocket" explanations pulled from this log's
+own reasoning), complete from-scratch setup instructions
+(`docker compose up -d --build`, env var setup for both `backend/.env` and
+`frontend/.env`, verification URLs, stop/reset commands), test commands with
+current pass counts (86/86 unit, 56/56 e2e — last recorded in Step 10; no
+backend changes since), moderator access (seed script, not a hardcoded
+password), a "known limitations / deliberate scope decisions" section (no
+voting, comments immutable, the 30-level `commentThread` fetch depth with
+its honest past-the-cap notice, "Continue this thread" re-rooting, seed-only
+moderator accounts), and clearly marked `TODO` placeholders for the live
+deployment URL and demo video link — no invented URLs.
+
+**`docs/db-schema-mysql-workbench.sql`** — the brief requires "a database
+schema file, openable in MySQL Workbench," but this project's runtime
+database is PostgreSQL (a deliberate choice — `commentThread`'s recursive
+CTE, documented in the Domain model / README sections). Rather than leaving
+that ambiguous, hand-translated the full `schema.prisma` (all four tables —
+`authors`, `comments`, `attachments`, `moderators` — every column, index,
+unique constraint, and foreign key, including the self-referencing
+`comments.parentId → comments.id` cascade) into MySQL 8-syntax DDL, with a
+header comment explaining explicitly that this file is for schema
+review/visualization only, is not runtime-connected, and will not
+auto-sync with future `schema.prisma` changes. Translation notes recorded
+inline: `String @id @default(uuid())` → `CHAR(36) DEFAULT (UUID())`,
+`Boolean @default(false)` → `TINYINT(1) DEFAULT 0`, `DateTime @default(now())`
+→ `DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3)`, the `AttachmentType` enum →
+a native MySQL `ENUM('IMAGE','TEXT')`. CAPTCHA is correctly absent here too
+(Redis-only, no table in either database).
+
+**Verified, not just written** — actually ran the DDL against a real MySQL
+server rather than eyeballing syntax: spun up a throwaway `mysql:8.0` Docker
+container, copied the file in, and ran it with `mysql ... -e "source
+schema.sql"` — **clean exit, zero errors**. Then went further than syntax
+validity: inserted a real author/root-comment/reply/attachment row set and
+confirmed `DELETE` on the root comment correctly **cascades** to both its
+reply and its attachment (mirroring Prisma's `onDelete: Cascade` on
+`Comment.parent` and the attachment relation) — `remaining_comments: 0`,
+`remaining_attachments: 0` after the delete. Also confirmed all three
+foreign keys exist with the right referenced table/column
+(`attachments.commentId → comments.id`, `comments.authorId → authors.id`,
+`comments.parentId → comments.id`) via `information_schema.KEY_COLUMN_USAGE`,
+and that an em-dash in a table comment round-trips correctly under
+`utf8mb4` (an earlier check without `--default-character-set=utf8mb4` on
+the client showed mojibake — confirmed via a second query with the correct
+client flag that this was a display-only artifact, not a real encoding bug
+in the stored data). Container removed after validation — nothing left
+behind.
+
+**README cross-reference**: the "Database schema" section explains the
+Postgres-vs-MySQL split so a reviewer isn't left wondering why two schema
+representations exist, and points at this file's exact path and how to open
+it in Workbench (Reverse Engineer MySQL Create Script, or plain
+File → Open SQL Script).
+
+**Deviations**: none — both deliverables were scoped exactly as asked.
+
+**Pending — updated**: moderator password rotation before deploy, demo data
+curation, deployment, and the demo video. README and the MySQL Workbench
+schema export are done.
