@@ -368,16 +368,26 @@ export function CommentForm(props: CommentFormProps) {
             ...(attachment ? { attachmentId: attachment.id } : {}),
           },
         },
-        // Keeps the root table's list + counts in sync without any prop wiring
-        // to RootCommentsTable. For a reply, also refetch the open thread — by
-        // *name*, not a specific rootId: Apollo refetches every currently
-        // active `CommentThread` watcher using its own variables, and since a
-        // reply's Reply button only exists inside an already-expanded thread,
-        // there's exactly one such watcher (the one being replied in). Naming
-        // it unconditionally would be a harmless no-op when nothing's expanded
-        // (Apollo just skips it), but scoping it to replies keeps the intent
-        // — "a reply invalidates its own thread" — obvious at the call site.
-        refetchQueries: parentId ? ["RootComments", "CommentThread"] : ["RootComments"],
+        // Root comment: refetch RootComments to keep the table's list/counts
+        // in sync — safe to coexist with RealtimeConnection's own socket-
+        // driven insert of this exact comment (received from our own
+        // broadcast too) because "insert this id if absent" is idempotent
+        // regardless of which one lands first.
+        //
+        // Reply: deliberately *not* included here anymore — refetch, not
+        // included in this list, only "CommentThread" is. A reply changes an
+        // existing comment's `repliesCount` by a *relative* +1, and unlike
+        // the idempotent root-insert above, a relative adjustment isn't safe
+        // to double-apply: if this refetch's absolute (correct) count landed
+        // first, RealtimeConnection's own socket-driven `+1` would apply on
+        // top of it a second time. RealtimeConnection's `cache.modify` is now
+        // the *only* code path that ever touches `repliesCount` — this tab
+        // included, since it also receives its own broadcast — see that
+        // file's `handleReplyCommentEvent` for the full reasoning. Still
+        // refetch "CommentThread" here, by name not a specific rootId, same
+        // as before: there's exactly one active watcher (the thread being
+        // replied in), and it's a harmless no-op if none is active.
+        refetchQueries: parentId ? ["CommentThread"] : ["RootComments"],
       });
 
       reset(DEFAULT_VALUES);

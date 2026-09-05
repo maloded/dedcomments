@@ -176,11 +176,19 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
       await hideCommentMutation({
         variables: { commentId: node.id },
         context: { headers: { Authorization: `Bearer ${session.token}` } },
-        // Whichever of these is actually mounted picks up the change: the
-        // root row (and its repliesCount) if this was a reply, or the whole
-        // row disappearing from the list if this was the root itself — same
-        // refetch-by-name pattern as CommentForm/RealtimeConnection.
-        refetchQueries: ["RootComments", "CommentThread"],
+        // Hiding a root: refetch RootComments too — safe to coexist with
+        // RealtimeConnection's own socket-driven removal (received from our
+        // own broadcast too), since "remove this id if present" is
+        // idempotent regardless of which one lands first.
+        //
+        // Hiding a reply: deliberately *not* included — only "CommentThread"
+        // is. That decrements the parent's `repliesCount` by a *relative* -1
+        // via RealtimeConnection's `cache.modify`, and unlike the idempotent
+        // root-removal above, a relative adjustment isn't safe to double-
+        // apply if this refetch's absolute count landed first. Same
+        // reasoning as CommentForm's reply-create path — see
+        // RealtimeConnection's `handleReplyCommentEvent` doc comment.
+        refetchQueries: node.parentId ? ["CommentThread"] : ["RootComments", "CommentThread"],
       });
     } catch (err) {
       if (isUnauthorized(err)) {

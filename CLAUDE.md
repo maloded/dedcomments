@@ -2671,3 +2671,169 @@ the default date-descending view of a 63+-seed-comment table):
 **Pending**: unchanged — README, DB schema export for MySQL Workbench,
 moderator password rotation, demo data curation, deployment, and the demo
 video.
+
+---
+
+### Step 18 — targeted Apollo cache update for live reply-count updates,
+replacing the full `rootComments`/`CommentThread` refetch (done)
+
+**Reported precisely, with an exact success criterion**: if tab A has a
+thread *collapsed* and a reply is posted to a comment inside it from tab B,
+the only thing that should change in tab A's DOM is the `repliesCount`
+number on that root's row — nothing else should re-render or repaint.
+
+**No React DevTools Profiler or Chrome Paint-Flashing UI is available in
+this headless-Playwright-automation context** (both are interactive
+DevTools panels). Used a `MutationObserver` attached to `document.body`
+(`childList`/`attributes`/`characterData`, with old-value tracking) as a
+scriptable, ground-truth substitute — it records exactly which DOM nodes
+were touched and how, which is what Profiler/Paint-Flashing would show
+visually. Every row was also tagged with a unique random
+`data-stable-marker` attribute before each trigger, so "did this exact DOM
+node survive" is a fact, not an inference from re-render count.
+
+**Root cause, confirmed via the observer, not assumed**: `RootCommentsTable`
+runs its `useQuery` with `notifyOnNetworkStatusChange: true`. Both
+`CommentForm`'s own post-submit `refetchQueries` and
+`RealtimeConnection`'s socket handler called a full
+`client.refetchQueries({ include: ["RootComments", ...] })` for *every*
+`commentCreated`/`commentHidden` event, reply or root. A full refetch flips
+`loading` back to `true` mid-flight (that's what
+`notifyOnNetworkStatusChange` is for), and `RootCommentsTable` renders
+`SKELETON_ROWS` (5) placeholder `<tr>`s while `loading` is true, then swaps
+back to the 25 real rows once the refetch resolves. Measured directly: this
+produced 195 mutation records (30 `<tr>` removed + 30 added, both sets
+containing `Skeleton`-classed elements, confirming the whole table swapped
+element *types* — real rows to skeletons and back) and **0 of 25** tagged
+markers survived. This is not a memoization problem — swapping element types
+under a `loading`-gated conditional discards and recreates the DOM
+regardless of whether the row component is `memo`'d, since React can't
+reconcile a `<Skeleton>` against a previous `<tr>` with real content.
+
+**Fix** (`RealtimeConnection.tsx`, the primary fix):
+- New `bumpRepliesCount(client, parentId, delta)` — a `cache.modify` write
+  targeting exactly one normalized `CommentModel` entity's `repliesCount`
+  field, a relative `existing + delta` adjustment.
+- New `handleReplyCommentEvent(client, delta, parentId)` — calls
+  `bumpRepliesCount` and then `client.refetchQueries({ include:
+  ["CommentThread"] })` only (never `"RootComments"`) — an open thread still
+  needs the new/removed reply itself, but the root table's count comes from
+  the targeted cache write, not a refetch.
+- `commentCreated`/`commentHidden` handlers now branch on `parentId`: `null`
+  → the existing Step 17 root-insert/root-remove cache logic; non-null →
+  `handleReplyCommentEvent` with `delta: +1`/`-1` respectively.
+
+**Why a relative delta needed the redundant refetches removed, not just
+added-to** (the insert case's "two triggers just overwrite the same value
+twice" argument from Step 17 does *not* extend to a relative adjustment):
+`CommentForm`'s own `refetchQueries` and this socket handler are two
+independent triggers for the poster's own reply. An idempotent write
+(insert-if-id-absent, remove-if-id-present) is safe under either firing
+order or both firing. A `+1`/`-1` delta is not — if both a refetch (which
+reads the server's already-correct count) and a `cache.modify` delta fire
+for the same event, the count double-applies. So the redundant
+`"RootComments"` refetches were removed at their source instead of adding
+dedup logic on top:
+- `CommentForm.tsx`: `refetchQueries: parentId ? ["RootComments",
+  "CommentThread"] : ["RootComments"]` → `parentId ? ["CommentThread"] :
+  ["RootComments"]` — a reply's own poster no longer refetches the table;
+  `RealtimeConnection`'s socket handler (which fires for the poster's own
+  post too, same as every other client) is now the *only* code path that
+  ever touches a root's `repliesCount`.
+- `CommentThreadNode.tsx`'s `handleHide`: unconditional `refetchQueries:
+  ["RootComments", "CommentThread"]` → `node.parentId ? ["CommentThread"] :
+  ["RootComments", "CommentThread"]` — hiding a reply no longer refetches
+  the table either, for the same reason.
+
+**Defense-in-depth, explicitly requested regardless of primary root cause**:
+`RootCommentsTable.tsx` extracts row rendering into a `React.memo`-wrapped
+`RootCommentRow`, with `toggleExpanded` wrapped in `useCallback` so it stays
+a stable prop reference. This doesn't fix the skeleton-swap bug above (a
+type swap defeats `memo` regardless), but it's a correct, low-cost guard
+against a *different*, real risk: if some future change makes the cache
+write recreate the `items` array (Apollo's normalized cache already keeps
+unaffected entity references stable, so this doesn't happen today),
+unaffected rows still won't re-render without it.
+
+**Verified — the exact success criterion, with before/after evidence**
+(full `docker compose up -d --build` stack, two real tabs, a thread
+collapsed in tab A, all 25 rows tagged with a fresh `data-stable-marker`
+before each trigger):
+- **Before the fix** (reply posted from tab B to a comment inside tab A's
+  collapsed thread): 195 mutation records, dominated by 30 `<tr>` removed +
+  30 added (skeleton swap both ways); **0 of 25** markers survived.
+- **After the fix**, same exact scenario: **1** mutation record — a single
+  `characterData` change on the affected row's own `repliesCount` `<td>`
+  text node (`oldValue` the old count) — and **25 of 25** markers survived
+  on their original DOM nodes. This is the literal success criterion the
+  task specified, confirmed by instrumentation rather than visual
+  impression.
+- **Re-confirmed the poster's own tab** (the reply's own author, not just a
+  passive second tab): exactly one increment, no double-count, from the two
+  triggers (own `refetchQueries` + own socket echo) now being disjoint
+  (`CommentThread` vs. the cache-modify) instead of both touching
+  `repliesCount`.
+- **Re-confirmed reply-hide** (same collapsed-thread scenario, moderator
+  hides a reply via `hideComment`): **1** mutation (`characterData`,
+  `repliesCount` decrementing), **25 of 25** markers survived — the hide
+  path shares `handleReplyCommentEvent` with `delta: -1`, and the evidence
+  confirms it behaves identically to the create case.
+- **Re-confirmed root-comment insert** (Step 17's case, unchanged by this
+  fix — `handleRootCommentCreated` was not touched): a new root comment
+  posted from tab B appeared correctly at the top of tab A's table via the
+  socket event. 4 mutations total — 1 `<tr>` removed (the 25th/oldest row
+  correctly falling off the page), 1 `<tr>` added (the new row), 1
+  `characterData` change (the total-count text), and 1 avatar `<img>`
+  `src` attribute change on an otherwise-unaffected row (isolated to that
+  one node; not investigated further since it neither reproduces a
+  full-table re-render nor regresses anything this session touched —
+  flagged below as a minor open item rather than silently dropped). 24 of
+  25 markers survived (the 25th correctly dropped, matching Step 17's own
+  prior measurement).
+- **Re-confirmed root-comment hide**: hiding a root comment removed exactly
+  that row (1 `childList` removal) and updated the total-count text (1
+  `characterData` change) — 2 mutations total, **24 of 24** remaining
+  rows' markers survived untouched. Some reflow here is inherently correct
+  (a row disappearing shifts the rows below it up one visual position) —
+  the evidence confirms that shift cost zero DOM-node re-creation, not zero
+  layout change.
+- An earlier verification attempt for the root-insert case produced an
+  ambiguous, seemingly-failed result (the new comment didn't appear in tab
+  A, and a CAPTCHA error was visible in tab B's form) — traced to a wrong
+  CAPTCHA answer being submitted (a test-setup mistake: the answer was read
+  from Redis for a stale token), not a regression. Re-run with a freshly
+  fetched CAPTCHA token/answer pair succeeded cleanly, confirmed above. Also
+  hit, and diagnosed, a `MutationObserver` self-pollution artifact during
+  this same verification pass: setting `data-stable-marker` on all rows and
+  clearing `window.__mut.length = 0` in the *same* synchronous script
+  produced spurious `attributes` mutations, because the observer's callback
+  is asynchronous (microtask-queued) and fired *after* the clear, recording
+  the marker-set itself into the just-emptied array. Fixed the test
+  methodology (flush `__mut` in a separate round-trip after any marker
+  reset, before triggering the real event) rather than the (nonexistent)
+  app bug this looked like at first.
+- Zero console errors throughout. `tsc --noEmit` / `next build` / `eslint`
+  all clean (frontend rebuilt via Docker after every source change, per the
+  no-source-mount setup).
+
+**Deviation from the user's suggested commit message**: the user's example,
+"perf: memoize table rows to prevent unrelated re-renders on repliesCount
+cache updates," names the defense-in-depth memoization as if it were the
+fix. The measured root cause was the `notifyOnNetworkStatusChange`-driven
+skeleton swap from a full refetch, not a missing-memoization re-render —
+`memo` alone cannot prevent a `loading`-gated element-type swap. The actual
+commit message reflects the cache-modify fix as primary, per the user's own
+explicit instruction to adjust it once the real cause was confirmed.
+
+**Pending — one minor open item, not investigated further this session**:
+the single avatar `<img src>` mutation observed on an unaffected row during
+root-comment-insert re-verification. It didn't reproduce a full-table
+re-render and every other measurement (24/25 markers, no `Skeleton`
+elements, no console errors) confirms the insert path stayed correct, but
+its cause (why one existing row's `Avatar` recomputed its `src` when neither
+its `username` nor `email` seed changed) wasn't root-caused — flagged here
+rather than silently ignored, in case it recurs somewhere more visible.
+
+**Pending — unchanged otherwise**: README, DB schema export for MySQL
+Workbench, moderator password rotation, demo data curation, deployment, and
+the demo video.

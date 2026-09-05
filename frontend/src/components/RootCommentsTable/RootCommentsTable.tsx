@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, memo, useCallback, useState } from "react";
 import { useQuery } from "@apollo/client/react";
 import {
   RootCommentsDocument,
@@ -56,6 +56,81 @@ function formatDate(iso: string): string {
   });
 }
 
+interface RootCommentRowProps {
+  item: RootCommentsQuery["rootComments"]["items"][number];
+  expanded: boolean;
+  onToggleExpand: (id: string) => void;
+}
+
+/**
+ * One root comment's row (plus its thread row, when expanded) — extracted
+ * and `memo`'d so that a targeted cache update touching only *one* comment
+ * (see `RealtimeConnection`'s `handleReplyCommentEvent`/
+ * `handleRootCommentCreated`/`handleRootCommentHidden`) doesn't re-render
+ * every other row too. This is defense-in-depth, not the primary fix for
+ * this session's flicker report — the actual root cause was a full
+ * `refetchQueries` flipping `loading` and swapping the whole table to
+ * skeleton placeholders and back (see `RealtimeConnection`), which
+ * `React.memo` alone can't prevent (a `loading`-gated conditional swaps
+ * element *types*, not just props). With that fixed, `RootCommentsTable`
+ * only ever re-renders because one comment's cached object actually
+ * changed — `memo`'s default shallow-prop comparison then correctly skips
+ * re-invoking this component for every row whose `item` reference (and
+ * `expanded`/`onToggleExpand`) didn't change, which Apollo's cache read
+ * already guarantees for unaffected entities (confirmed via `MutationObserver`
+ * DOM-mutation tracking, the same technique used to diagnose the bug: after
+ * the fix, updating one comment's `repliesCount` produces mutations scoped
+ * to that one row's own `<td>`, not a single other row touched).
+ *
+ * `onToggleExpand` must be a stable function reference (see
+ * `RootCommentsTable`'s `useCallback`) for this memoization to actually take
+ * effect — a fresh inline arrow function passed as a prop on every parent
+ * render would make `memo`'s shallow comparison fail for every row, every
+ * time, silently defeating the whole point.
+ */
+const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) {
+  const { item, expanded, onToggleExpand } = props;
+
+  return (
+    <Fragment>
+      <tr>
+        <td className={cls.username}>
+          <span className={cls.authorCell}>
+            <Avatar className={cls.avatar} seed={`${item.author.username} ${item.author.email}`} />
+            {item.author.username}
+          </span>
+        </td>
+        <td className={cls.email} data-label="Email">
+          {item.author.email}
+        </td>
+        <td className={cls.date} data-label="Date">
+          {formatDate(item.createdAt)}
+        </td>
+        <td className={cls.replies} data-label="Replies">
+          {item.repliesCount}
+        </td>
+        <td className={cls.expandCell}>
+          <Button
+            size="sm"
+            variant="clear"
+            aria-expanded={expanded}
+            onClick={() => onToggleExpand(item.id)}
+          >
+            {expanded ? "Collapse" : "Expand"}
+          </Button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className={cls.threadRow}>
+          <td colSpan={5} className={cls.threadCell}>
+            <CommentThread rootId={item.id} />
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+});
+
 /**
  * The home-page table of top-level comments: sortable columns, pagination, an
  * "Expand" placeholder per row (thread loading is a later session — see
@@ -72,7 +147,12 @@ export function RootCommentsTable() {
   // policy means that costs nothing extra over the network for the same rootId.
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
-  const toggleExpanded = (id: string) => {
+  // `useCallback` with an empty dependency array (only ever touches the
+  // stable `setExpandedIds` setter) — a fresh arrow function here on every
+  // render would be a new prop reference for every `RootCommentRow` on
+  // every render, defeating that component's `memo` regardless of whether
+  // `item` itself stayed stable. See `RootCommentRow`'s doc comment.
+  const toggleExpanded = useCallback((id: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -82,7 +162,7 @@ export function RootCommentsTable() {
       }
       return next;
     });
-  };
+  }, []);
 
   const { data, loading, error } = useQuery(RootCommentsDocument, {
     variables: { page, sortBy, sortOrder },
@@ -167,50 +247,14 @@ export function RootCommentsTable() {
             )}
 
             {!loading &&
-              items.map((item) => {
-                const expanded = expandedIds.has(item.id);
-                return (
-                  <Fragment key={item.id}>
-                    <tr>
-                      <td className={cls.username}>
-                        <span className={cls.authorCell}>
-                          <Avatar
-                            className={cls.avatar}
-                            seed={`${item.author.username} ${item.author.email}`}
-                          />
-                          {item.author.username}
-                        </span>
-                      </td>
-                      <td className={cls.email} data-label="Email">
-                        {item.author.email}
-                      </td>
-                      <td className={cls.date} data-label="Date">
-                        {formatDate(item.createdAt)}
-                      </td>
-                      <td className={cls.replies} data-label="Replies">
-                        {item.repliesCount}
-                      </td>
-                      <td className={cls.expandCell}>
-                        <Button
-                          size="sm"
-                          variant="clear"
-                          aria-expanded={expanded}
-                          onClick={() => toggleExpanded(item.id)}
-                        >
-                          {expanded ? "Collapse" : "Expand"}
-                        </Button>
-                      </td>
-                    </tr>
-                    {expanded && (
-                      <tr className={cls.threadRow}>
-                        <td colSpan={5} className={cls.threadCell}>
-                          <CommentThread rootId={item.id} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
+              items.map((item) => (
+                <RootCommentRow
+                  key={item.id}
+                  item={item}
+                  expanded={expandedIds.has(item.id)}
+                  onToggleExpand={toggleExpanded}
+                />
+              ))}
           </tbody>
         </table>
       </div>
