@@ -2573,3 +2573,101 @@ the frontend image — desktop 1280px + 375px mobile):
 **Pending**: unchanged — README, DB schema export for MySQL Workbench,
 moderator password rotation, demo data curation, deployment, and the demo
 video.
+
+---
+
+### Step 17 — targeted Apollo cache update for live root-comment insertion,
+replacing the full `rootComments` refetch (done)
+
+**Reported from two-tab manual testing**: a `commentCreated` broadcast
+triggered `client.refetchQueries({ include: ["RootComments"] })`, which
+replaces the whole `rootComments` field wholesale — every row in the table
+re-renders, not just the new one, visibly flickering against the 56+-seed
+dataset. Scoped tightly per the task: only root-comment creates on
+`rootComments` got the optimization; `commentHidden` and reply creates
+(`CommentThread` + the `repliesCount` bump on `RootComments`) are untouched,
+still refetch-based, exactly as before.
+
+**Design** (`RealtimeConnection.tsx`, new `handleRootCommentCreated`):
+- Only the currently-*active* `RootComments` observable query(ies) are
+  touched, via `client.getObservableQueries("active")` — nothing needs doing
+  for a page nobody's watching.
+- **Only the default LIFO view (page 1, `sortBy: CREATED_AT`,
+  `sortOrder: DESC`) gets a real cache write.** Every other active
+  page/sort combination is refetched instead via `ObservableQuery.refetch()`
+  — scoped to that one query, not a broad `refetchQueries` by name — per the
+  task's own explicit permission to skip client-side positioning logic for
+  sort modes where "where does a new comment go" isn't a one-line answer
+  (a later page, or username/email order). This was a deliberate choice, not
+  a limitation discovered after the fact: reimplementing the backend's
+  sort/pagination server-side logic in the client for every mode wasn't
+  worth it for what the two-tab report was actually about.
+- For the LIFO-default case: `client.cache.updateQuery` reads the exact
+  cached `{ page: 1, sortBy: CREATED_AT, sortOrder: DESC }` result, prepends
+  the new comment (built from the broadcast's `CommentModel` payload, with
+  `__typename: "CommentModel"`/`"AuthorModel"` added by hand — the socket
+  payload is raw JSON, not a GraphQL response, so it has none), truncates
+  back to `ROOT_COMMENTS_PER_PAGE` (25, hand-mirrored from the backend
+  constant, same pattern as `lib/validation.ts`) if the page was already
+  full, and bumps `totalCount`/recomputes `totalPages` to match what a real
+  refetch would return.
+- **Dedup by id**, explicitly required by the task and genuinely necessary
+  under this design (unlike the old refetch-based approach, whose "two
+  refetches just each overwrite the field with the same result" argument no
+  longer applies once the create path does a targeted array *mutation*
+  rather than a wholesale *replacement*): the poster's own tab always has
+  two independent triggers for the same new comment — `CommentForm`'s own
+  `refetchQueries: ["RootComments"]` on mutation success, and this socket
+  handler receiving the broadcast of that same comment — arriving in either
+  order. `updateQuery`'s callback checks `items.some(item => item.id ===
+  comment.id)` and no-ops if already present, so whichever of the two lands
+  second is always a safe no-op regardless of race order.
+
+**A real bug found and fixed during verification, not anticipated up
+front**: the first cut matched the target observable via
+`observable.query !== RootCommentsDocument`, which never matched anything —
+confirmed against the installed Apollo Client's own compiled source that
+`ObservableQuery.query` returns `this.lastQuery`, assigned from an internal
+`transformDocument` call (e.g. `addTypenameToDocument`), never the raw
+document passed to `useQuery`. Fixed by matching on `observable.queryName`
+(derived from the GraphQL operation's own `name.value`, stable across that
+transform) instead — the same thing `refetchQueries({ include: [...] })`
+already matches by internally, so this is the idiomatically-correct way to
+identify a query, not a workaround.
+
+**Verified manually** (full `docker compose up -d --build` stack — rebuilt
+the frontend image after each fix — two real browser tabs, tab B parked on
+the default date-descending view of a 63+-seed-comment table):
+- **DOM-identity check, not just visual inspection**: tagged all 25 of tab
+  B's existing rows with a unique random `data-stable-marker` attribute
+  before posting from tab A. After the broadcast landed, **24 of the 25
+  original markers were still present on the exact same row elements**,
+  each shifted down by exactly one position with unchanged content — proof
+  React reused the same DOM nodes rather than re-rendering them, not just an
+  absence of visible flicker. The one row that lost its marker was the
+  25th/oldest, correctly dropped off the now-26-item page. The new top row
+  (the just-posted comment) correctly had no marker — a genuinely new node,
+  as expected.
+- **Dedup, both sides**: after tab A posted, tab A's own table showed
+  exactly one row for that comment (its own `refetchQueries` and the
+  socket's cache write both fired, no duplicate); tab B (socket-only, no
+  local mutation) also showed exactly one row.
+- **Counts**: `totalCount`/`Page X of Y` updated correctly after two
+  consecutive live inserts (63 → 64 → 65, `Page 1 of 3` throughout, matching
+  `ceil(65/25)`).
+- **Pagination/sorting unaffected**: clicking Next (page 2) and clicking the
+  Username column header (switching sort + resetting to page 1) each still
+  triggered a normal fresh network request and rendered correctly — the
+  live-update path only changes what happens on a socket event, not the
+  table's own query behavior.
+- **Non-default-sort fallback path**: with tab B sorted by Username
+  ascending, posting from tab A produced exactly one new GraphQL request in
+  tab B (confirmed by request count going from 4 → 5) — the
+  `ObservableQuery.refetch()` fallback firing as designed, scoped to that
+  one active query rather than a broad refetch-by-name.
+- Zero console errors throughout every step above. `tsc --noEmit` and
+  `eslint` both clean.
+
+**Pending**: unchanged — README, DB schema export for MySQL Workbench,
+moderator password rotation, demo data curation, deployment, and the demo
+video.
