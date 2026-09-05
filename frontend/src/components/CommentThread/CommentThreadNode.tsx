@@ -50,12 +50,16 @@ export interface ThreadNode {
 }
 
 /**
- * Matches CLAUDE.md → "Tree rendering on the frontend": indentation grows with
- * depth up to this cap, then grows more slowly rather than stopping outright
- * (`.indentCapped`, in CommentThread.module.scss) so deep threads don't run
- * off screen. Tightened further on mobile via `--avatar-size`/`--connector-gutter`.
- * The connector *line* itself doesn't care about any of this — see
- * `useConnectorLines`, which measures wherever avatars actually end up.
+ * Matches CLAUDE.md → "Tree rendering on the frontend": indentation grows
+ * with depth up to this cap. Past it, a comment's own replies are never
+ * rendered inline at all — instead of the normal "layer-by-layer" reveal
+ * toggle, a node at this depth with replies shows a "Continue this thread →"
+ * link that re-roots the whole panel on that comment (see `CommentThread`'s
+ * `rerootStack`), so indentation never actually has to represent more than
+ * these levels in any single view — no flattened/reduced-indent styling
+ * needed past the cap, because nothing renders past it. Tightened further on
+ * mobile via `--avatar-size`/`--connector-gutter` (indentation *within* the
+ * cap is narrower there, the cap depth itself is the same).
  */
 const MAX_VISUAL_DEPTH = 6;
 
@@ -68,21 +72,32 @@ interface CommentThreadNodeProps {
   depth: number;
   /** Bubbled up to `CommentThread`'s `refetch()` after a reply is posted. */
   onReplyPosted: () => void;
+  /** Called with this node's own id when its "Continue this thread →" link
+   * (shown only at `MAX_VISUAL_DEPTH` with replies) is clicked — pushes onto
+   * `CommentThread`'s `rerootStack` so that node becomes the new depth-0 view. */
+  onContinueThread: (id: string) => void;
 }
 
 /**
- * One comment plus its replies, rendered recursively. Depth-capped indentation
- * (see `MAX_VISUAL_DEPTH`); replies render in the order the backend already
- * returns them (LIFO per level — no client-side re-sorting).
+ * One comment plus its replies, rendered recursively. Reveal is layer-by-layer,
+ * one click per branch, not "show the whole fetched subtree at once":
+ * `collapsed` defaults to `false` only at depth 0 (so the panel's current view
+ * root shows its direct replies immediately), and to `true` at every deeper
+ * depth — a node's own nested replies stay hidden behind its own
+ * "[+] N replies" toggle until *that specific node* is clicked. Each branch's
+ * reveal depth is independent of its siblings' (separate `useState` per
+ * mounted instance), and collapsing a node and re-expanding it doesn't lose
+ * whatever deeper layers were already revealed under it — replies stay
+ * mounted the whole time (only the *container*'s CSS grid row collapses to
+ * `0fr`), so a descendant's own `collapsed` state is untouched by an
+ * ancestor's toggle.
  *
- * Collapsing a subtree is plain React state (the data's already in hand) — the
- * replies stay mounted and the height animates via a CSS grid `1fr → 0fr`
- * transition. The inline reply form animates open on mount and plays a close
- * animation before unmounting (`replyClosing`).
+ * Past `MAX_VISUAL_DEPTH` this layer-by-layer reveal stops entirely — see
+ * `atCap` below and `CommentThread`'s re-rooting stack.
  */
 export function CommentThreadNode(props: CommentThreadNodeProps) {
-  const { node, depth, onReplyPosted } = props;
-  const [collapsed, setCollapsed] = useState(false);
+  const { node, depth, onReplyPosted, onContinueThread } = props;
+  const [collapsed, setCollapsed] = useState(depth > 0);
   const [replying, setReplying] = useState(false);
   const [replyClosing, setReplyClosing] = useState(false);
   const [moderationError, setModerationError] = useState<string | null>(null);
@@ -107,10 +122,15 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
   const repliesFetched = node.replies !== undefined;
   const hasReplies = (node.replies?.length ?? 0) > 0;
   const hiddenByFetchDepth = !repliesFetched && node.repliesCount > 0;
-  // Past this depth the nesting container stops adding indent (the connector
-  // still draws) so deep threads don't march off the right edge — see
-  // CommentThread.module.scss `.indentCapped`.
-  const indentCapped = depth >= MAX_VISUAL_DEPTH;
+  // At this depth, a normal reveal toggle would need to render a further
+  // level of indentation that has nowhere to go — show "Continue this
+  // thread →" instead (re-roots the panel on this node) rather than
+  // rendering its replies inline at all. Mutually exclusive with
+  // `hiddenByFetchDepth`: that one only fires when `replies` is genuinely
+  // absent (the 30-level *absolute* fetch boundary, unrelated to this
+  // *relative*, per-view cap), in which case there's no data to re-root into
+  // either, so the existing "thread too deep to fetch" notice still applies.
+  const atCap = depth >= MAX_VISUAL_DEPTH;
 
   // `replyClosing` swaps in the CSS collapse animation, then a short timer
   // unmounts the form once it's played. A timer (not `animationend`) because
@@ -233,7 +253,7 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           </div>
         )}
         <div className={cls.actions}>
-          {hasReplies && (
+          {hasReplies && !atCap && (
             <Button
               size="sm"
               variant="clear"
@@ -244,6 +264,11 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
               {collapsed
                 ? `[+] ${node.repliesCount} ${node.repliesCount === 1 ? "reply" : "replies"}`
                 : "[–] collapse"}
+            </Button>
+          )}
+          {hasReplies && atCap && (
+            <Button size="sm" variant="clear" onClick={() => onContinueThread(node.id)}>
+              Continue this thread →
             </Button>
           )}
           <Button size="sm" variant="clear" onClick={toggleReply}>
@@ -276,12 +301,9 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
         )}
       </div>
 
-      {hasReplies && (
+      {hasReplies && !atCap && (
         <div
-          className={classNames(cls.replies, {
-            [cls.indentCapped]: indentCapped,
-            [cls.collapsed]: collapsed,
-          })}
+          className={classNames(cls.replies, { [cls.collapsed]: collapsed })}
           // Read by `useConnectorLines` — a collapsed subtree stays mounted
           // (for the height animation) but its avatars shouldn't get a
           // connector line drawn to them while they're not visible.
@@ -294,6 +316,7 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
                 node={reply}
                 depth={depth + 1}
                 onReplyPosted={onReplyPosted}
+                onContinueThread={onContinueThread}
               />
             ))}
           </div>

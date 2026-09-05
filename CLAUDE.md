@@ -2179,3 +2179,119 @@ horizontal overflow). **Regression check**: replied to a depth-2 comment
 **Deviation**: none — scope stayed to the one reported failure mode (plus
 the honest-fallback notice, which is the direct fix for *why* it read as a
 silent failure rather than a visible error, not a separate feature).
+
+---
+
+### Step 14 — layer-by-layer reply reveal within the depth cap, "Continue
+this thread" stack-based re-rooting past it (done)
+
+**Two prior experiments on top of `ede6761` were reset out before this step,
+not carried forward**: a "restore the flat depth cap" fix and a dashed
+connector-line boundary marker. Neither gave the UX actually wanted, so the
+branch was reset to `ede6761` and this step replaces both with a different
+design entirely — there is no dashed line anywhere in the app, and the
+depth-cap problem is solved with a different mechanism (below), not a
+flattened-indent CSS rule. Entirely client-side, using data
+`commentThread` already fetches in one request to 30 levels (confirmed
+still true at `ede6761`) — no backend change.
+
+**Layer-by-layer reveal within the cap** (`CommentThreadNode.tsx`) — this is
+the original Step 7 design, restored: `collapsed` defaults to `false` only
+at the panel's current depth-0 view root, and to `true` at every deeper
+depth, so expanding a root only ever surfaces its *direct* replies; each
+reply's own nested replies stay behind its own "[+] N replies" toggle,
+clicked one branch/one level at a time. State is local `useState` per
+mounted node instance (not a lifted `Set`) — since a collapsed subtree's
+children stay mounted (the CSS grid `1fr → 0fr` collapse animation needs
+that), sibling branches are independent by construction and collapsing a
+node never discards whatever was already revealed underneath it, satisfying
+the "don't reset on collapse" requirement without extra bookkeeping.
+
+**"Continue this thread →" past the cap** — a node at exactly
+`MAX_VISUAL_DEPTH` (6, unchanged) with replies now renders a
+"Continue this thread →" link instead of the normal reveal toggle, and its
+`.replies` block isn't rendered at all (not flattened-indent, not present in
+the DOM). Clicking it calls `CommentThread`'s new `continueThread(id)`,
+which pushes the id onto `rerootStack: string[]` (`useState<string[]>([])`).
+`CommentThread` resolves the stack's top id against the *already-fetched*
+tree via a small recursive `findNode`, and renders that node as the new
+depth-0 `<CommentThreadNode>` — `key={viewRoot.id}` forces a fresh mount so
+its (and its descendants') local reveal state starts clean, exactly like a
+freshly-expanded root. Its own children get their own fresh layer-by-layer
+reveal and their own depth cap, so a deep enough re-rooted view can itself
+show a further "Continue this thread". `useConnectorLines` is now driven by
+`viewRoot` instead of the absolute fetched root, so the SVG overlay only
+ever measures avatars that are actually in the current view — no cap-aware
+logic needed there, since past-cap nodes were never in the DOM in the first
+place and are silently skipped by the existing "one end missing" guard.
+
+**"← Back to parent thread"** — shown above the thread only when
+`rerootStack.length > 0`; pops one entry
+(`setRerootStack(s => s.slice(0, -1))`). Since the stack holds every
+intermediate re-root, not just the true original root, N "Continue this
+thread" clicks need exactly N "Back" clicks to undo, retracing one step at
+a time rather than jumping straight back to the top — verified below.
+
+**Removed as dead code**: `.indentCapped`/`indentCapped` and its
+`.repliesInner { padding-left: ... }` override — nothing ever renders past
+`MAX_VISUAL_DEPTH` in a single view anymore, so there's no "past the cap"
+indentation case left to special-case; the deepest node in any one view is
+always exactly at the cap, indented normally like every level before it.
+
+**Deviation**: the task's phrasing suggested "e.g. a Set of revealed
+comment ids" for reveal-state tracking; local per-instance `useState`
+(depth-dependent default) was used instead, since it already satisfies
+every stated requirement — independent sibling branches, collapse without
+discarding deeper reveals — without threading extra props through every
+recursion level, and it's the mechanism this exact feature already used
+before `ede6761` (Step 7 in this log). No other deviations — mobile keeps
+the same fixed `MAX_VISUAL_DEPTH = 6` as desktop (only the CSS spacing
+tokens are smaller there), matching every prior session; no new responsive
+JS cap was introduced.
+
+**Verified manually** (full `docker compose up -d --build` stack — the
+frontend container is a production build with no source volume mount, so it
+needed an actual rebuild to pick up each source change, confirmed by
+re-checking behavior only after rebuilding — desktop 1280px + 375px
+mobile, the existing 20+-level `Aurora` test thread):
+- Expanding the root revealed exactly its direct replies (`Cassius`,
+  `bornholm`); `bornholm`'s own nested reply stayed behind its own
+  "[+] 1 reply" toggle. Walked one click at a time down to depth 6
+  (`haddock`) — every intermediate level required its own click, plain
+  solid connector lines throughout, normal per-level indentation, zero
+  dashed styling anywhere (confirmed both by screenshot and that no
+  dash-related CSS/class exists in the stylesheet at all).
+- At `haddock` (depth 6), "Continue this thread →" appeared instead of a
+  reveal toggle. Clicking it re-rooted the panel on `haddock` — "← Back to
+  parent thread" appeared, `haddock` rendered as the new depth-0 node with
+  its own direct replies (`carla`, `Juno`, `ingram`) shown immediately and
+  `Juno`'s own nested reply freshly collapsed behind its own toggle (not
+  inheriting any prior reveal state — confirms the `key`-forced remount).
+- Walked down again from the re-rooted view to a second cap boundary
+  (`depthchain12`, absolute depth 12) and re-rooted a second time; walked
+  down again to a third boundary (`depthchain18`, absolute depth 18) and
+  re-rooted a third time. Clicked "← Back to parent thread" three times,
+  reading the view-root username after each click:
+  `depthchain18 → depthchain12 → haddock → Aurora` — each click retraced
+  exactly one step, never jumping straight to the original root; the "Back"
+  link itself correctly disappeared once the stack emptied.
+- **Depth-11-fix regression check**: replied to `haddock` (absolute depth
+  6) through the real UI (Reply → fill → read the CAPTCHA answer from Redis
+  → submit). The mutation succeeded and the new reply was correctly present
+  in the very next `commentThread` refetch — but invisible in the
+  *current* (non-re-rooted) view, exactly as designed, since `haddock` sits
+  at the cap there and its children aren't rendered in that view at all.
+  Clicking "Continue this thread" on `haddock` immediately showed the new
+  reply with no reload, confirming the write path from the original
+  depth-11 fix is untouched and works correctly under the new cap UI.
+- **Connector-line-drift regression check**: after re-expanding to a cap
+  boundary, matched every rendered SVG `<path>` endpoint against its
+  avatar's real `getBoundingClientRect()` center — **0px delta on all
+  edges**. Repeated at 375px mobile — same result, no horizontal overflow
+  (`scrollWidth === clientWidth`).
+- Zero console errors throughout every step above. `tsc --noEmit` and
+  `eslint` both clean.
+
+**Pending**: unchanged from prior sessions — README, DB schema export for
+MySQL Workbench, moderator password rotation, demo data curation,
+deployment, and the demo video (CLAUDE.md's "Delivery format" section).
