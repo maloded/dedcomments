@@ -1,3 +1,29 @@
+.CollapsibleCommentForm {
+  display: grid;
+}
+
+// Same technique as CommentThread.module.scss's `.replies`/`.collapsed`:
+// a lone `1fr` track sizes to the row's real content height, and `0fr`
+// collapses it to zero — both are plain numbers CSS can interpolate frame
+// by frame, unlike `height: auto`, which has nothing to interpolate to/from
+// and would just snap. Two independent rows (prompt, form) transition in
+// opposite directions at once, so the swap between them reads as one
+// continuous resize instead of a hard content replacement.
+.row {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-base) var(--ease-out);
+}
+
+.rowCollapsed {
+  grid-template-rows: 0fr;
+}
+
+.rowInner {
+  overflow: hidden;
+  min-height: 0;
+}
+
 .prompt {
   overflow: hidden; // clips .promptButton's focus ring/hover to the Card's own radius
 }
@@ -16,42 +42,5 @@
   &:hover {
     color: var(--color-text);
     background: var(--color-row-hover);
-  }
-}
-
-// Same "keep mounted through the close animation, then unmount" pattern and
-// the exact same durations/easings as CommentThread.module.scss's
-// `.replyForm`/`.replyClosing` — reused for consistency, not reinvented.
-.form {
-  overflow: hidden;
-  animation: form-open var(--dur-base) var(--ease-out) backwards;
-}
-
-.closing {
-  animation: form-close var(--dur-fast) var(--ease-in-out) forwards;
-}
-
-@keyframes form-open {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-    max-height: 0;
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-    max-height: 800px;
-  }
-}
-
-@keyframes form-close {
-  from {
-    opacity: 1;
-    max-height: 800px;
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-6px);
-    max-height: 0;
   }
 }

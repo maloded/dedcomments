@@ -2479,3 +2479,97 @@ the frontend image, production build with no source volume mount — desktop
 **Pending**: unchanged — README, DB schema export for MySQL Workbench,
 moderator password rotation, demo data curation, deployment, and the demo
 video.
+
+---
+
+### Post-Step-16 fix — collapsible root comment form's collapse animation
+was janky (done)
+
+**Diagnosed before touching anything.** Read Step 16's own implementation
+fresh rather than assuming which of the three suspected causes was at
+fault — turned out to be two of them at once, not one:
+
+1. **The collapsed prompt and the expanded form were two entirely different
+   JSX branches returned conditionally** (`if (!expanded) return <Card>…
+   </Card>; return <div>…<CommentForm/></div>;`). Expanding *unmounted* the
+   prompt bar and *mounted* a brand-new form div in the same render — an
+   instant, un-animatable content swap with nothing shared between the two
+   states for the browser to interpolate. This is why "the container may be
+   animating" while "the text inside jumps": the newly-mounted form div did
+   play its own entrance animation, but the prompt text it replaced had
+   already vanished in the same frame, with no crossfade between them.
+2. **`max-height` was animated via `@keyframes` to a fixed, guessed ceiling
+   (800px)**, not `height: auto` directly (so not quite the classic
+   `height: auto` trap as originally suspected) — but the same family of
+   problem: once the real content's height passes whatever ceiling is
+   picked, the box's visible height plateaus early while the timeline
+   keeps running, and if the real content is *shorter* than the ceiling
+   (measured at 692px for this form — see below) the animation still walks
+   `max-height` all the way to 800px, doing nothing visible for the last
+   stretch while `opacity`/`transform` finish on their own schedule —
+   exactly hypothesis (c), a desync between the container's size and the
+   content's own fade, just caused by (b)'s ceiling rather than a literal
+   `auto` transition.
+
+**Root cause of *why* Step 16 ended up here**: it explicitly copied
+`CommentThreadNode`'s inline-reply-form animation (`.replyForm`/
+`.replyClosing`, fixed-`max-height` keyframes + a `setTimeout`-deferred
+unmount) for "consistency." That pattern was the wrong one to copy for
+*this* UI: a reply form has only one visual state (present or absent) with
+nothing else taking its place, so the swap-based approach never had a
+second, competing piece of content to jump against. The collapsed root form
+needed the *other* animation pattern already in the same codebase —
+`CommentThread.module.scss`'s `.replies`/`.collapsed`
+(`grid-template-rows: 1fr` ↔ `0fr` on an always-mounted element, no mount/
+unmount at all) — which exists specifically because it doesn't need a
+guessed ceiling and has real content to transition the whole time.
+
+**Fix**: rewrote `CollapsibleCommentForm` around that exact pattern instead.
+Both the prompt row and the form row are now **always mounted**, each its
+own single-row CSS Grid container transitioning `grid-template-rows`
+between `1fr` (its real content height) and `0fr` (fully clipped via
+`overflow: hidden` on a `.rowInner` child, mirroring `.repliesInner`'s
+`overflow: hidden; min-height: 0`) — the two rows animate in opposite
+directions at once, so the transition reads as one continuous resize
+instead of a content replacement. No `@keyframes`, no fixed height guess,
+no JS timer, no mount/unmount — `CommentForm` itself never unmounts now,
+`expanded` is the only state `CollapsibleCommentForm` still owns.
+
+**Side effects of the fix, not new requirements — flagged rather than
+silently accepted**:
+- A typed-but-uncollapsed draft now survives a collapse/re-expand (it's
+  only ever visually clipped, never torn down). Arguably better UX than
+  Step 16's original "Cancel discards" framing, not worse — but a real
+  behavior change worth naming.
+- The CAPTCHA is fetched once on first mount instead of on every expand
+  (previously, unmounting/remounting `CommentForm` on every collapse↔expand
+  cycle re-ran its `no-cache` `captchaChallenge` query each time) — an
+  incidental efficiency win, confirmed by observing exactly one
+  `captchaChallenge` network request across an expand → cancel → expand →
+  post cycle in this session's manual verification.
+
+**Verified manually** (full `docker compose up -d --build` stack — rebuilt
+the frontend image — desktop 1280px + 375px mobile):
+- Confirmed the mechanism directly before trusting it visually: read
+  computed `grid-template-rows` and `getBoundingClientRect().height` on
+  both rows at rest — prompt row `46px`/`46px` (collapsed default), form
+  row `0px`/`0px`, while the actual `CommentForm` `Card` underneath
+  measured its real **692px** — proving the technique clips to true content
+  height with no ceiling guessing, unlike the fixed-800px approach it
+  replaced.
+- Sampled row heights every 30ms through a full expand: prompt
+  `46→0`, form `0→692`, a smooth monotonic ease-out curve settling exactly
+  at 692px with no plateau or overshoot. Repeated for collapse (the exact
+  reverse curve) — equally smooth.
+- Full functional flow still works: expanded, filled in a real comment
+  (CAPTCHA answer read from Redis, same method as every prior session),
+  posted successfully, and the form auto-collapsed afterward (`animfix`
+  appeared in the table; form row back to 0px, prompt row back to 46px).
+- Repeated at 375px mobile — same behavior, no horizontal overflow
+  (`scrollWidth === clientWidth`).
+- Zero console errors throughout every step above. `tsc --noEmit` and
+  `eslint` both clean.
+
+**Pending**: unchanged — README, DB schema export for MySQL Workbench,
+moderator password rotation, demo data curation, deployment, and the demo
+video.
