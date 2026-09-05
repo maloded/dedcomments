@@ -2295,3 +2295,82 @@ mobile, the existing 20+-level `Aurora` test thread):
 **Pending**: unchanged from prior sessions — README, DB schema export for
 MySQL Workbench, moderator password rotation, demo data curation,
 deployment, and the demo video (CLAUDE.md's "Delivery format" section).
+
+---
+
+### Step 15 — revert layer-by-layer reveal; show the full subtree at once
+within the depth cap (done)
+
+**Reported from hands-on testing, not a code-review finding**: Step 14's
+layer-by-layer reveal (one click per depth level, `collapsed` defaulting to
+`true` below the view root) interacted badly with "Continue this thread"
+navigation. `key={viewRoot.id}` (needed so a re-root gets fresh local state)
+forces a remount on every "← Back" too — so going back to a parent thread
+didn't restore it as the user had left it, it restored it to
+*freshly-mounted-and-mostly-collapsed*, since that was `collapsed`'s default
+below depth 0. Concretely: expand a root, click through several layers to
+reach a "Continue this thread" link, re-root, then click "Back" — the parent
+view came back collapsed to depth-1-only, forcing the user to re-click
+through every layer again just to get back to where they'd already been
+looking. Reverted rather than patched around, per the session's own framing
+of this as the wrong direction, not a bug in the layer-reveal mechanism
+itself.
+
+**Fix**: `CommentThreadNode`'s `collapsed` now defaults to `false`
+unconditionally (was `depth > 0`) — the whole fetched subtree renders at
+once on mount, all the way down to `MAX_VISUAL_DEPTH`, exactly how it
+worked before Step 14. The per-node "[–] collapse" / "[+] N replies" toggle
+button is unchanged in every other respect — it still exists, still hides/
+shows one branch via the same CSS grid `1fr → 0fr` animation, still keeps
+descendants mounted so nothing is lost — it's just no longer the only way to
+see content in the first place. This incidentally also fixes the back-nav
+complaint for free: `key={viewRoot.id}`'s forced remount on "Back" now
+lands on a `collapsed: false` default, so the parent view always re-renders
+fully expanded within its own cap, never partially collapsed, without
+needing to special-case "Back" or preserve state across the remount at all.
+
+Nothing else from Step 14 changed: `MAX_VISUAL_DEPTH` (6) is the same,
+"Continue this thread →" at the cap boundary and `rerootStack`-based
+re-rooting are untouched, `.indentCapped` stays removed (still dead code —
+nothing renders past the cap in a single view either way), and there is
+still no dashed connector-line styling anywhere.
+
+**Deviation**: none — a straight revert of one `useState` default plus the
+doc-comment updates that description change implies (`CommentThreadNode`'s
+top comment, `MAX_VISUAL_DEPTH`'s comment, and `CommentThread`'s
+`rerootStack` comment, which now explains *why* the forced remount also
+fixes the back-navigation complaint).
+
+**Verified manually** (full `docker compose up -d --build` stack — rebuilt
+the frontend image, since the container is a production build with no
+source volume mount — desktop 1280px + 375px mobile, the same 20+-level
+`Aurora` test thread):
+- Expanding the root immediately showed every level from 0 through 6
+  (`haddock`, "Continue this thread →") in one click — confirmed via
+  screenshot and via `document.querySelectorAll` finding **zero** `[+]`
+  ("collapsed branch") buttons anywhere in the freshly-expanded tree.
+- Re-rooted three times in a row (`haddock → depthchain12 → depthchain18`,
+  each via its own "Continue this thread") — each re-rooted view *also*
+  showed its full subtree at once (zero `[+]` buttons after each re-root,
+  not just after the initial Expand).
+- Clicked "← Back to parent thread" three times, checking both the view
+  root's username and the collapsed-button count after each click:
+  `depthchain18 → depthchain12 → haddock → Aurora`, **zero `[+]` buttons at
+  every step** — confirms both the one-step-at-a-time stack behaviour
+  (unchanged from Step 14) and the actual fix (no re-collapsing on Back).
+  The "Back" link itself correctly disappeared once the stack emptied.
+- **Depth-11-fix regression check**: replied to `haddock` (absolute depth
+  6, at the cap in the true-root view) through the real UI (Reply → fill →
+  read the CAPTCHA answer from Redis → submit). Succeeded, invisible in the
+  current (non-re-rooted) view exactly as designed (haddock's children
+  aren't rendered there), and appeared immediately — fully expanded,
+  no reload — on re-rooting onto `haddock`.
+- **Connector-line-drift regression check**: matched every rendered SVG
+  `<path>` endpoint against its avatar's real `getBoundingClientRect()`
+  center at a fully-expanded cap boundary — **0px delta on all edges**.
+- Zero console errors throughout. No horizontal overflow at 375px
+  (`scrollWidth === clientWidth`). `tsc --noEmit` and `eslint` both clean.
+
+**Pending**: unchanged — README, DB schema export for MySQL Workbench,
+moderator password rotation, demo data curation, deployment, and the demo
+video.

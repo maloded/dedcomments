@@ -45,12 +45,20 @@ function findNode(node: ThreadNode, id: string): ThreadNode | null {
  *
  * `rerootStack` implements "Continue this thread →" (see `CommentThreadNode`'s
  * `atCap`): pushing a comment id makes that comment the panel's new depth-0
- * view root, with its own fresh layer-by-layer reveal and its own depth cap.
+ * view root, with its own full subtree shown at once and its own depth cap.
  * "← Back to parent thread" pops one entry — the previous state, which may
  * itself be an intermediate re-rooted view, not necessarily the true root —
  * so N "Continue this thread" clicks need exactly N "Back" clicks to undo.
  * Nothing here ever refetches: the whole stack resolves against the one
  * already-fetched tree via `findNode`.
+ *
+ * `key={viewRoot.id}` below forces a fresh `CommentThreadNode` mount on every
+ * re-root *and* on every "Back" — which is exactly why "Back" can't leave a
+ * parent thread looking partially collapsed: a fresh mount's `collapsed`
+ * state defaults to fully expanded (see that component's doc comment), so
+ * the parent view always re-renders showing everything within its own cap,
+ * never whatever partial reveal state an earlier design might have left
+ * behind.
  */
 export function CommentThread(props: CommentThreadProps) {
   const { rootId } = props;

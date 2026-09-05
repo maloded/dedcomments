@@ -52,9 +52,9 @@ export interface ThreadNode {
 /**
  * Matches CLAUDE.md → "Tree rendering on the frontend": indentation grows
  * with depth up to this cap. Past it, a comment's own replies are never
- * rendered inline at all — instead of the normal "layer-by-layer" reveal
- * toggle, a node at this depth with replies shows a "Continue this thread →"
- * link that re-roots the whole panel on that comment (see `CommentThread`'s
+ * rendered inline at all — instead of the normal "[-] collapse" toggle, a
+ * node at this depth with replies shows a "Continue this thread →" link
+ * that re-roots the whole panel on that comment (see `CommentThread`'s
  * `rerootStack`), so indentation never actually has to represent more than
  * these levels in any single view — no flattened/reduced-indent styling
  * needed past the cap, because nothing renders past it. Tightened further on
@@ -79,25 +79,28 @@ interface CommentThreadNodeProps {
 }
 
 /**
- * One comment plus its replies, rendered recursively. Reveal is layer-by-layer,
- * one click per branch, not "show the whole fetched subtree at once":
- * `collapsed` defaults to `false` only at depth 0 (so the panel's current view
- * root shows its direct replies immediately), and to `true` at every deeper
- * depth — a node's own nested replies stay hidden behind its own
- * "[+] N replies" toggle until *that specific node* is clicked. Each branch's
- * reveal depth is independent of its siblings' (separate `useState` per
- * mounted instance), and collapsing a node and re-expanding it doesn't lose
- * whatever deeper layers were already revealed under it — replies stay
- * mounted the whole time (only the *container*'s CSS grid row collapses to
- * `0fr`), so a descendant's own `collapsed` state is untouched by an
- * ancestor's toggle.
+ * One comment plus its replies, rendered recursively. The whole fetched
+ * subtree renders at once, all the way down to `MAX_VISUAL_DEPTH` — no
+ * per-level reveal clicking. (An earlier session tried layer-by-layer reveal,
+ * one click per depth; it was reverted after hands-on testing showed it fought
+ * with "Continue this thread" back-navigation — going "← Back" to a parent
+ * view re-collapsed everything to depth-1-only, forcing the user to re-click
+ * through every layer just to get back to where they'd already been looking.
+ * See CLAUDE.md's fix entry.)
  *
- * Past `MAX_VISUAL_DEPTH` this layer-by-layer reveal stops entirely — see
- * `atCap` below and `CommentThread`'s re-rooting stack.
+ * `collapsed` still exists, but only as a manual "hide this branch I've
+ * already seen" toggle — it defaults to `false` for every node, not
+ * depth-dependent, so nothing needs revealing on mount. Replies stay mounted
+ * while collapsed (only the *container*'s CSS grid row collapses to `0fr`),
+ * so a descendant's own `collapsed` state is untouched by an ancestor's
+ * toggle — collapsing and re-expanding a branch never loses anything.
+ *
+ * Past `MAX_VISUAL_DEPTH` nothing renders inline at all — see `atCap` below
+ * and `CommentThread`'s re-rooting stack.
  */
 export function CommentThreadNode(props: CommentThreadNodeProps) {
   const { node, depth, onReplyPosted, onContinueThread } = props;
-  const [collapsed, setCollapsed] = useState(depth > 0);
+  const [collapsed, setCollapsed] = useState(false);
   const [replying, setReplying] = useState(false);
   const [replyClosing, setReplyClosing] = useState(false);
   const [moderationError, setModerationError] = useState<string | null>(null);
