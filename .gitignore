@@ -45,3 +45,4 @@ Thumbs.db
 
 # ─── Uploads (local attachment storage) ──────────────────────────────────────
 backend/uploads/
+.playwright-mcp/
