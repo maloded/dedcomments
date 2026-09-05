@@ -1,0 +1,57 @@
+.prompt {
+  overflow: hidden; // clips .promptButton's focus ring/hover to the Card's own radius
+}
+
+.promptButton {
+  display: block;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-text);
+    background: var(--color-row-hover);
+  }
+}
+
+// Same "keep mounted through the close animation, then unmount" pattern and
+// the exact same durations/easings as CommentThread.module.scss's
+// `.replyForm`/`.replyClosing` — reused for consistency, not reinvented.
+.form {
+  overflow: hidden;
+  animation: form-open var(--dur-base) var(--ease-out) backwards;
+}
+
+.closing {
+  animation: form-close var(--dur-fast) var(--ease-in-out) forwards;
+}
+
+@keyframes form-open {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 800px;
+  }
+}
+
+@keyframes form-close {
+  from {
+    opacity: 1;
+    max-height: 800px;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+    max-height: 0;
+  }
+}

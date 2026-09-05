@@ -2374,3 +2374,108 @@ source volume mount — desktop 1280px + 375px mobile, the same 20+-level
 **Pending**: unchanged — README, DB schema export for MySQL Workbench,
 moderator password rotation, demo data curation, deployment, and the demo
 video.
+
+---
+
+### Investigation — "Choose File" button reported unclickable (no code
+change; false alarm)
+
+A file-picker click issue was reported from manual testing, with a request
+to diagnose before touching anything (possibly a regression from the
+Step 14/15 thread-view work bleeding into `CommentForm`). Diagnosed
+thoroughly before concluding anything: on a fresh page load, the
+`<input type="file">` was confirmed genuinely enabled
+(`disabled: false`, `pointer-events: auto`), `document.elementFromPoint()`
+at its center returned the input itself (no overlay, including the
+connector-line SVG, which is `pointer-events: none` anyway), a real trusted
+click opened the native OS file chooser in both the root and a reply form,
+and a full upload → select → `uploadAttachment` → attachment-set → input-
+hides-itself flow completed with zero console errors. `git log` confirmed
+`CommentForm.tsx` hasn't been touched by any commit since `df985cc` — none
+of the recent `rerootStack`/reveal-state work in `CommentThreadNode` had a
+code path into it, ruling out the suspected state-bleed. No global click
+interceptors exist anywhere in the app either.
+
+Reported back with the full diagnosis and asked the user to help close the
+gap between the report and what could be reproduced — turned out to be a
+false alarm: it worked correctly in the user's own actual browser tab, and
+whatever blocked it in the tab they'd been testing in earlier (suspected:
+cache, an extension, or zoom level specific to that one tab) wasn't a
+defect in the code. **No code change made.**
+
+---
+
+### Step 16 — collapsible root comment form (done)
+
+New feature, not a fix: the root comment form (`HomeView`) now loads
+**collapsed** by default — a single-line "Leave a comment…" prompt instead
+of the full field set — and expands to the complete form on click. Reply
+forms (opened via "Reply" on a specific comment in `CommentThreadNode`) are
+explicitly unaffected: they already have their own expand/collapse
+affordance (the "Reply"/"Cancel" toggle button), so wrapping them in a
+second collapse layer would just be redundant chrome.
+
+**Implementation**
+- New `components/CollapsibleCommentForm/` (`.tsx` + `.module.scss` +
+  `index.ts`, standard colocation) — the only new component. Owns
+  `expanded`/`closing` state and renders either a `Card`-wrapped
+  `<button>` reading "Leave a comment…" (collapsed) or the real
+  `<CommentForm>` (expanded). `HomeView.tsx` swaps its direct `<CommentForm>`
+  usage for this wrapper; nothing else in `HomeView` changed.
+- `CommentForm.tsx` gained one small, backward-compatible addition: an
+  optional `onCancel?: () => void` prop. When set, a small "Cancel" button
+  renders next to the "Leave a comment"/"Reply" heading (disabled while
+  submitting, so a mid-flight mutation isn't left updating an unmounted
+  component). `CommentThreadNode`'s reply usage doesn't pass it — confirmed
+  by re-reading that call site — so reply forms render exactly as before,
+  no new button appears there. `onSuccess` (already an existing prop) is
+  reused as the "return to collapsed" hook after a real post — no new prop
+  needed for that half.
+- **Animation reused, not reinvented**, per the task's own instruction:
+  `CollapsibleCommentForm.module.scss`'s `form-open`/`form-close` keyframes
+  and the mount/unmount timing (`useState` + a `setTimeout`-driven "closing"
+  class before actually collapsing) are a direct copy of
+  `CommentThreadNode`'s inline-reply-form pattern — same properties
+  (opacity + `translateY` + `max-height`), same tokens
+  (`--dur-base`/`--dur-fast`, `--ease-out`/`--ease-in-out`), same 800px
+  ceiling, same `CLOSE_MS = 200` reasoning (long enough to safely outlast
+  the CSS animation under both normal and `prefers-reduced-motion`-clamped
+  conditions). Different keyframe *names* only, since CSS Modules scope
+  `@keyframes` per file — the values themselves are identical on purpose.
+
+**Deviation / judgment call**: Cancel-with-typed-content just collapses
+immediately, no confirmation prompt. The task explicitly allowed either
+"simplest" option for this; adding a confirmation dialog for a test
+assignment's comment box would be over-engineering a case with no real
+cost to getting wrong (worst case: retype a comment, same as accidentally
+closing any ordinary text box). No other deviations — the collapsed bar
+uses the existing `Card`/`Button`-adjacent styling conventions (muted text,
+row-hover highlight on hover) rather than introducing a new visual style.
+
+**Verified manually** (full `docker compose up -d --build` stack — rebuilt
+the frontend image, production build with no source volume mount — desktop
+1280px + 375px mobile):
+- Fresh page load: form renders collapsed ("Leave a comment…" bar), full
+  root comments table directly below it — confirmed via screenshot.
+- Clicking the bar expands to the complete form (all fields, CAPTCHA,
+  attachment, Post button) with a "Cancel" link next to the heading.
+- Cancel collapses back to the bar (`input[name="username"]` gone from the
+  DOM, prompt text back).
+- Filled and posted a real comment (CAPTCHA answer read from Redis, same
+  method as every prior session's manual verification) — the comment
+  appeared in the table and the form returned to its collapsed state
+  automatically, matching "collapsed by default" even right after a
+  successful post.
+- Expanded a reply form on an existing thread — appears inline immediately
+  as before, exactly **one** "Cancel"-labelled button on the page (the
+  pre-existing external toggle), confirming no duplicate/second Cancel
+  affordance leaked into replies.
+- Repeated the collapsed/expanded states at 375px mobile — same behaviour,
+  no horizontal overflow (`scrollWidth === clientWidth`).
+- Zero console errors through every step above. `tsc --noEmit` and `eslint`
+  both clean (only the same pre-existing, unrelated React Compiler
+  info-warning on `CommentForm`'s `watch()` seen in every prior session).
+
+**Pending**: unchanged — README, DB schema export for MySQL Workbench,
+moderator password rotation, demo data curation, deployment, and the demo
+video.

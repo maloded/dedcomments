@@ -1,6 +1,6 @@
 "use client";
 
-import { CommentForm } from "@/components/CommentForm";
+import { CollapsibleCommentForm } from "@/components/CollapsibleCommentForm";
 import { RootCommentsTable } from "@/components/RootCommentsTable";
 import { ConnectionStatusIndicator } from "@/components/ConnectionStatusIndicator";
 import { ModeratorPanel } from "@/components/ModeratorPanel";
@@ -23,7 +23,7 @@ export function HomeView() {
           <ModeratorPanel />
         </div>
       </div>
-      <CommentForm className={cls.form} />
+      <CollapsibleCommentForm className={cls.form} />
       <RootCommentsTable />
     </div>
   );

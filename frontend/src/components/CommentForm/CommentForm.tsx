@@ -134,6 +134,12 @@ interface CommentFormProps {
   parentId?: string;
   onSuccess?: () => void;
   className?: string;
+  /** Shows a small "Cancel" button next to the heading when set — used by
+   * `CollapsibleCommentForm` to close the root form back to its collapsed
+   * bar without posting. Reply forms don't pass this: `CommentThreadNode`
+   * already has its own external "Reply"/"Cancel" toggle, so a second one
+   * inside the form itself would be redundant there. */
+  onCancel?: () => void;
 }
 
 /**
@@ -143,7 +149,7 @@ interface CommentFormProps {
  * approach".
  */
 export function CommentForm(props: CommentFormProps) {
-  const { parentId, onSuccess, className } = props;
+  const { parentId, onSuccess, className, onCancel } = props;
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -428,7 +434,20 @@ export function CommentForm(props: CommentFormProps) {
         }}
         noValidate
       >
-        <h2 className={cls.heading}>{parentId ? "Reply" : "Leave a comment"}</h2>
+        <div className={cls.headingRow}>
+          <h2 className={cls.heading}>{parentId ? "Reply" : "Leave a comment"}</h2>
+          {onCancel && (
+            <Button
+              type="button"
+              size="sm"
+              variant="clear"
+              disabled={isSubmitting}
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          )}
+        </div>
 
         <div className={cls.row}>
           <label className={cls.field}>
