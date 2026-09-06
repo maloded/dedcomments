@@ -153,11 +153,12 @@ Rules:
 - `@CurrentUser()` (`core/decorators/`) reads `req.user` — available on guarded resolvers.
 - Same "Invalid username or password" for a wrong user and a wrong password (no account
   enumeration).
-- **Moderator seed**: `npm run seed:moderator` (`prisma/seed-moderator.ts`, `ts-node`)
-  upserts one account from `MODERATOR_USERNAME` / `MODERATOR_PASSWORD` in `backend/.env`.
-  Dev defaults (in `.env.example`): **`moderator` / `moderator-dev-password`** — change
-  before any real deploy. The script needs dev deps, so for a deployed DB run it from a
-  local checkout pointed at the prod `DATABASE_URL`.
+- **Moderator seed**: `npm run seed:moderator` (`prisma/seed-moderator.js`, plain
+  CommonJS — deliberately not TypeScript/`ts-node`, so it also runs in the production
+  image, e.g. `docker exec <container> npm run seed:moderator`, without needing pruned
+  dev dependencies) upserts one account from `MODERATOR_USERNAME` / `MODERATOR_PASSWORD`
+  in `backend/.env`. Dev defaults (in `.env.example`): **`moderator` /
+  `moderator-dev-password`** — change before any real deploy.
 - **Ban enforcement**: `AuthorsService.findOrCreate` (the choke point every
   `createComment` passes through) rejects a banned `(username, email)` identity with
   `ForbiddenException` before any write.

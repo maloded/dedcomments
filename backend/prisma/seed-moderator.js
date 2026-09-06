@@ -6,12 +6,17 @@
  * Credentials come from MODERATOR_USERNAME / MODERATOR_PASSWORD in backend/.env
  * (dev defaults are in .env.example). Nothing sensitive is committed — the seed
  * reads env at run time.
+ *
+ * Plain CommonJS, not TypeScript: this needs to run in the production image
+ * too (e.g. `docker exec ... node prisma/seed-moderator.js`), which has
+ * ts-node pruned as a dev dependency. bcryptjs/@prisma/client/dotenv are all
+ * regular dependencies, so `node` alone is enough — no build step needed.
  */
-import 'dotenv/config';
-import { PrismaClient } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
+require('dotenv/config');
+const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 
-async function main(): Promise<void> {
+async function main() {
 	const username = process.env.MODERATOR_USERNAME ?? 'moderator';
 	const password = process.env.MODERATOR_PASSWORD;
 
@@ -29,7 +34,6 @@ async function main(): Promise<void> {
 			create: { username, passwordHash },
 			update: { passwordHash },
 		});
-		// eslint-disable-next-line no-console
 		console.log(
 			`✅ moderator "${moderator.username}" ready (id ${moderator.id})`,
 		);
@@ -38,8 +42,7 @@ async function main(): Promise<void> {
 	}
 }
 
-void main().catch((error: unknown) => {
-	// eslint-disable-next-line no-console
+void main().catch((error) => {
 	console.error(error);
 	process.exit(1);
 });

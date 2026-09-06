@@ -69,7 +69,7 @@ export class EnvironmentVariables {
 	@IsString()
 	JWT_EXPIRES_IN = '1d';
 
-	// Consumed only by prisma/seed-moderator.ts, not the running app.
+	// Consumed only by prisma/seed-moderator.js, not the running app.
 	@IsOptional()
 	@IsString()
 	MODERATOR_USERNAME?: string;
