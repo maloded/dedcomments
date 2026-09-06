@@ -3144,3 +3144,43 @@ old for sharp's minimum libvips).
 - Demo data curation, the demo video, and a final full run-through of the
   README's "from scratch" steps against this live deployment remain from
   the brief's "Delivery format" section.
+
+---
+
+### Post-Step-20 fix — Vercel build failure from `output: "standalone"` (done)
+
+The Vercel deployment (frontend, separate from the VPS backend above)
+failed with `ENOENT: no such file or directory, open
+'/vercel/path0/frontend/.next/next-server.js.nft.json'`.
+
+**Root cause**: `next.config.ts`'s `output: "standalone"` — added in Step 6
+specifically for the Docker runtime image (copies only the traced
+minimal-server files into the runner stage, not the full `node_modules`
+tree) — was set unconditionally. Vercel has its own build/serverless
+tracing pipeline, which is incompatible with Next's standalone output mode
+and fails trying to locate its trace files. The two deployment targets
+need different output modes from the same `next.config.ts`.
+
+**Fix**: `output: "standalone"` is now conditional on a `BUILD_STANDALONE`
+env var, set to `true` only in `frontend/Dockerfile`'s build stage (right
+before `RUN npm run build`) — Vercel's own build never sets it, so it gets
+Next's normal (non-standalone) output instead, which is what its tracing
+pipeline expects.
+
+**Verified**:
+- `docker build` on `frontend/` (full local rebuild, no cache) still
+  succeeds and produces `.next/standalone` exactly as before; booted the
+  resulting image standalone (`docker run -p 13000:3000 ...`) and
+  confirmed `GET /` returns `200`.
+- A plain `next build` with `BUILD_STANDALONE` unset (simulating Vercel)
+  no longer produces `.next/standalone` at all — confirms the Vercel build
+  now takes its normal, tracing-compatible path instead of the one that
+  crashed.
+- `tsc --noEmit` and `eslint` both clean (same one pre-existing, unrelated
+  React Compiler info-warning on `CommentForm`'s `watch()` seen in every
+  prior frontend session).
+- No changes needed on the already-live VPS backend deployment (Step 20) —
+  this fix is frontend-only and doesn't touch anything the backend
+  container uses.
+
+**Deviation**: none — scoped exactly to the one reported failure.

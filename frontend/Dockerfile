@@ -15,6 +15,9 @@ COPY . .
 ARG NEXT_PUBLIC_GRAPHQL_URL=http://localhost:4000/graphql
 ENV NEXT_PUBLIC_GRAPHQL_URL=$NEXT_PUBLIC_GRAPHQL_URL
 
+# Only the Docker build wants `output: "standalone"` (next.config.ts reads
+# this) — Vercel's build doesn't set it and gets Next's normal output instead.
+ENV BUILD_STANDALONE=true
 RUN npm run build
 
 # ─── Stage 2: runtime ────────────────────────────────────────────────────────
