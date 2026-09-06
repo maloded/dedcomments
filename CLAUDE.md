@@ -2913,3 +2913,234 @@ File → Open SQL Script).
 **Pending — updated**: moderator password rotation before deploy, demo data
 curation, deployment, and the demo video. README and the MySQL Workbench
 schema export are done.
+
+---
+
+### Step 20 — backend deployed to comments-api.dedstream.in.ua (done)
+
+Backend-only production deployment, on the same VPS that already hosts
+DedStream (`server0890.server-vps.com`, `194.28.84.180`), to a brand-new
+isolated subdomain — DedStream's own containers, Nginx config, and SSL
+certificate were never modified. The frontend is deployed separately to
+Vercel (not part of this step) and will point at
+`https://comments-api.dedstream.in.ua/graphql` once live.
+
+**DedStream stopped for the review period — restore procedure (read this
+first if you're bringing DedStream back)**
+
+At the user's explicit request, DedStream's 3 containers were stopped
+(`docker stop`, never `docker rm`) so this deployment's build/compile work
+had the VPS's limited RAM to itself. They are **not running** as of this
+entry. Restore with:
+
+```
+docker start postgres redis dedstream-app
+```
+
+(exact container IDs, in case names ever collide: `postgres` =
+`0b372e110bf5`, `redis` = `6c0b21dae807`, `dedstream-app` = `2226d82d91b8`.
+`docker start <id>` works identically to `docker start <name>`.)
+
+**Important — DedStream's `restart: always` policy means it comes back on
+its own after any VPS reboot**, even though it was manually stopped first;
+this bit us twice during this session (see below) — both times the fix was
+just re-running the `docker stop` above. If DedStream is meant to stay down
+across a reboot, its compose file's restart policy would need changing to
+`unless-stopped` (`no` semantics on manual stop) — not done here, since the
+brief only asked for a temporary pause, not a policy change to a project
+outside this one's scope.
+
+**Reconnaissance (read-only, before touching anything)**: confirmed
+`comments-api.dedstream.in.ua` resolves to `194.28.84.180` via `dig` from
+the server itself; confirmed DedStream's containers publish host ports 4000
+(app), 5432 (postgres), 6379 (redis) — all of which the committed
+`docker-compose.yml` also wants, so a deploy-specific override was needed
+(see below); found free candidate ports (4001, 4002, 4010, 8080); read
+`/etc/nginx/sites-available/dedstream` to match its exact certbot-managed
+vhost style; confirmed only `docker-compose` v1.29.2 (no v2 plugin) is
+installed.
+
+**Swap file added** — this VPS has **969Mi RAM and, before this step, zero
+swap**. A `docker-compose.prod.yml` sharp-from-source compile (see below)
+needs headroom a sub-1GB box doesn't have on its own.
+`fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile &&
+swapon /swapfile`, persisted via `/etc/fstab` (`/swapfile none swap sw 0
+0`) so it survives a reboot. Left in place — not removed after the
+deploy — since the underlying constraint (a <1GB VPS) doesn't go away once
+the container is built; a future rebuild of this image directly on the VPS
+would need it again. Revisit only if disk space ever gets tight (2G on a
+25G disk, currently ~30% used).
+
+**Deploy-specific compose setup (not committed — gitignored)**:
+- `/opt/dedcomments/.env` — root-level dotenv, **only** for
+  `docker-compose`'s own `${VAR}` substitution (distinct from
+  `backend/.env`, which only affects the container's runtime environment
+  via `env_file:`) — `POSTGRES_USER/PASSWORD/DB` and
+  `RABBITMQ_DEFAULT_USER/PASS`, mirroring `backend/.env`'s values exactly.
+  Necessary because `docker-compose.yml`'s `DATABASE_URL`/`RABBITMQ_URL`
+  overrides interpolate these via `${POSTGRES_PASSWORD:-comments}`-style
+  compose-file-level substitution, which reads a root dotenv or the shell
+  environment — **not** `backend/.env` — a real gotcha that would otherwise
+  silently connect the backend to Postgres with the wrong (default)
+  password.
+- `backend/.env` — production values from `.env.example`: freshly
+  generated `JWT_SECRET` (32-byte hex), `POSTGRES_PASSWORD`/
+  `RABBITMQ_DEFAULT_PASS` (16-byte hex each, matching the root `.env`
+  above), `NODE_ENV=production`, and **`ALLOWED_ORIGIN=*`** — deliberately
+  temporary (see "Pending" below), and a freshly generated
+  `MODERATOR_PASSWORD` (given to the user separately, never committed —
+  see chat, not this file).
+- `docker-compose.prod.yml` — a **standalone** file, not a
+  `docker-compose.override.yml` merged with the base file. First attempt
+  used an override setting `ports: []` on postgres/redis/rabbitmq and a
+  rebound `ports:` on backend — `docker-compose config` revealed this old
+  `docker-compose` (v1.29.2) **merges/concatenates** list-type keys like
+  `ports:` across `-f` files rather than replacing them, so the override
+  silently added ports instead of removing the base file's. A standalone
+  file sidesteps the merge behavior entirely. It: drops `ports:` from
+  `postgres`/`redis`/`rabbitmq` entirely (the backend reaches them over the
+  compose-internal `comments` network by service name, which is all it
+  ever needed — nothing forced them onto the host in the first place, this
+  deploy just doesn't opt into it), binds `backend` to
+  `127.0.0.1:4001:4000` (not `0.0.0.0:4000`, which DedStream already
+  holds, and not exposed publicly — Nginx is the only public entry point),
+  and omits the `frontend` service entirely (deployed separately to
+  Vercel).
+
+**Repo cloned to `/opt/dedcomments`** (matching DedStream's own
+`/opt/dedstream` convention) via HTTPS (`git clone
+https://github.com/maloded/dedcomments.git` — the SSH clone failed, no
+deploy key configured on this VPS for a public repo that doesn't need one).
+
+**The sharp/CPU-microarchitecture bug — the actual bulk of this step's
+time** (full technical detail in the `fix:` commit alongside this entry,
+`backend/Dockerfile`): the first `docker-compose up -d --build` produced a
+container that crash-looped instantly with `TypeError: Cannot read
+properties of undefined (reading 'endsWith')` inside
+`sharp/dist/sharp.cjs`. Root-caused through several layers:
+1. This VPS's CPU (`QEMU Virtual CPU version 2.5+`, confirmed via
+   `/proc/cpuinfo` missing `sse4_1`/`sse4_2`/`ssse3`/`popcnt`) doesn't meet
+   the x86-64-v2 microarchitecture level sharp's prebuilt
+   linux-x64/linuxmusl-x64 binaries require (`sharp._isUsingX64V2()`
+   returns `false`). Sharp's own WASM fallback then also failed (`Wasm
+   SIMD unsupported`), and *that* failure's error object has no `.code`
+   property — tripping a real bug in sharp's own error-formatting code
+   (`err.code.endsWith(...)` with no optional chaining) that turned a
+   legitimate "no compatible binary" situation into the confusing crash
+   above.
+2. **First fix attempt — `npm_config_build_from_source=true` — did
+   nothing**: sharp >= 0.33 dropped its custom install/postinstall
+   lifecycle script entirely in favour of pure `optionalDependencies`
+   platform-package resolution; there's no install-time hook left to check
+   that env var. The actual from-source path is `sharp/install/build.js`,
+   an opt-in script wired into no npm lifecycle at all — has to be invoked
+   explicitly, and needs `node-gyp`/`node-addon-api` present (sharp
+   deliberately doesn't bundle them, per that script's own error
+   messages).
+3. Getting that script to actually work took several rounds, now baked
+   into `backend/Dockerfile`'s builder stage: `node-gyp`'s CLI needs
+   `node_modules/.bin` on `PATH` (its require-resolution alone isn't
+   enough); `install/build.js` must be run with `cwd` = `node_modules/sharp`
+   (its internal `--directory=src` is relative to that, not the app's own
+   `/app`); the compile then failed on a missing `glib-object.h` (needs
+   `glib-dev`, not just `vips-dev`) and then on `libvips version 8.18.6+
+   is required` — Alpine 3.23's stable `vips-dev` is only 8.17.3, so
+   `vips-dev`/`vips`/`vips-cpp` are all pinned to Alpine's **edge** repo
+   via a `@edge` repository alias (cherry-picking just these packages from
+   edge, not switching the whole image, which caused real
+   `openssl-dev`/`libcrypto3` conflicts when tried).
+4. A last, sneaky bug: after fixing all of the above, `require('sharp')`
+   appeared to work **locally** (`sharp.versions.vips: "8.18.6"`) but the
+   exact same image still crashed on the VPS. Root cause: the runtime
+   stage only installed the apk `vips` package, which ships just the plain
+   C API (`libvips.so`) — the C++ bindings sharp actually links against
+   live in a **separate** `vips-cpp` package. Locally, sharp's `require()`
+   silently fell through to the bundled `@img/sharp-linuxmusl-x64`
+   prebuilt binary (which works fine on a modern CPU) when the from-source
+   build's `libvips-cpp.so.42` was missing — masking the bug entirely.
+   Confirmed via `ldd` directly on the compiled `.node` file (not just
+   `require('sharp')`, which can silently mask a broken global-libvips
+   build by falling back to the bundled one) that all symbols resolve
+   cleanly only once `vips-cpp` was added to the runtime stage too, and
+   that `sharp.versions` then reports **only** `{vips, sharp}` (not the
+   full bundled sub-library list) — the tell that global-libvips mode is
+   genuinely active, not a masked fallback.
+
+**This VPS's Docker build engine itself hangs on long `RUN` steps —
+building the image directly on the VPS was abandoned, not fixed**: even
+with the swap file in place (memory stayed healthy throughout, confirmed
+via `dmesg`, zero OOM-kills), two separate `docker-compose build --no-cache
+backend` attempts on the VPS **hung indefinitely** — an intermediate
+build-step container would cleanly exit, then spontaneously flip to a
+`Dead` status, with the outer `docker build` process left sitting at 0%
+CPU forever. Reproduced twice, at two different steps (`npm ci` once,
+`COPY . .` the other time) — not tied to any specific step's content or
+duration, pointing at a Docker/containerd-level bug in this host's old
+Docker (v29.1.3 daemon + `docker-compose` v1.29.2), not a resource issue.
+**Workaround**: build the image on the dev machine instead (same `x86_64`
+architecture) — `docker build`, `docker save | gzip`, `scp` the ~187 MB
+tarball, `docker load` on the VPS. Confirmed working, no further hangs.
+Also hit, separately, a `docker-compose` v1.29.2 bug
+(`KeyError: 'ContainerConfig'`) when trying to *recreate* a container from
+a `docker load`-ed image on top of an existing one — current BuildKit
+image metadata is missing a legacy field v1.29.2's Python code expects.
+Fixed by `docker rm -f`-ing the old container first so compose does a
+fresh `create` instead of a `recreate` (which never hits that code path).
+
+**A second, unnoticed VPS reboot happened mid-session** (`uptime` showed
+"up 17 min" partway through — likely the hosting provider's platform,
+possibly related to the swap-file change, though never confirmed) — caught
+only because DedStream's containers had silently come back via their
+`restart: always` policy (see the restore-procedure note above); re-ran
+`docker stop postgres redis dedstream-app` once noticed. Unrelated to the
+Docker-build-hang issue above (that was reproduced independently, with the
+server never losing SSH responsiveness either time).
+
+**Nginx + certbot**: `/etc/nginx/sites-available/comments-api`, styled
+identically to `sites-available/dedstream` (same certbot-managed
+`server { listen 443 ssl; ... }` + `server { listen 80; return 301
+https://...; }` pair, same `proxy_set_header Upgrade`/`Connection
+'upgrade'` pair already needed for Socket.IO), proxying to
+`127.0.0.1:4001`. `certbot --nginx -d comments-api.dedstream.in.ua`
+obtained a **separate** certificate (`/etc/letsencrypt/live/comments-api.dedstream.in.ua/`,
+expires 2026-12-05) and auto-rewrote only this one vhost file — confirmed
+`api.dedstream.in.ua`'s own certificate and vhost file were never touched
+(`certbot certificates` lists both as independent entries).
+
+**Verified — real end-to-end checks, not just "container didn't crash"**:
+`docker logs comments_backend` shows a full clean Nest boot (`🚀 Backend
+ready at http://localhost:4000/graphql`), stable (no restart-loop);
+`captchaChallenge` query works both directly on `127.0.0.1:4001` and
+through `https://comments-api.dedstream.in.ua/graphql`; **uploaded a real
+640×480 PNG via `uploadAttachment`**, polled `attachment(id)` until
+`processedAt` was set (near-instant), then `docker cp`'d the actual file
+off the container and ran `file` on it from the VPS host — confirmed
+genuine **320×240** output, proving the RabbitMQ resize consumer and the
+now-fixed sharp both work for real, not just "the module loaded". `GET
+/graphql` with an HTML `Accept` header returns the Apollo Sandbox (200)
+both directly and through the new HTTPS domain. `api.dedstream.in.ua`
+currently returns `502` — expected and correct, not a regression: its own
+backend container is the one intentionally stopped for the review period
+(see restore procedure above); the vhost/proxy config itself is untouched
+and would work the moment that container is started again.
+
+**Deviations from the original plan (with reasons)** — all covered in
+more detail above, summarized: standalone `docker-compose.prod.yml`
+instead of an override file (old compose's list-merging behavior);
+`docker-compose.prod.yml`/root `.env` are deploy-local and gitignored, not
+committed (server topology, not app config); build-locally-and-transfer
+instead of building on the VPS (reproducible Docker-engine hang on this
+host); `vips-dev`/`vips`/`vips-cpp` pinned to Alpine edge (stable is too
+old for sharp's minimum libvips).
+
+**Pending**:
+- **`ALLOWED_ORIGIN=*` needs tightening** once the Vercel frontend URL is
+  known — currently wide open, fine for pre-launch verification, not for
+  real traffic. Update `backend/.env` on the VPS and
+  `docker-compose -f docker-compose.prod.yml up -d backend` to pick it up
+  (no rebuild needed, it's just an env var).
+- **DedStream is stopped** — see the restore procedure at the top of this
+  entry. Restart it whenever the review period is over.
+- Demo data curation, the demo video, and a final full run-through of the
+  README's "from scratch" steps against this live deployment remain from
+  the brief's "Delivery format" section.
