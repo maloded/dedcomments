@@ -3310,3 +3310,77 @@ via a one-off `docker run` against a build-stage image that still has
 **Deviation**: none from what was asked; the moderator-seed and
 socket-CORS findings are flagged, not acted on unilaterally, since neither
 was part of this step's actual scope.
+
+---
+
+### Post-Step-20 fix — moderator seed script runnable in production (done)
+
+Closes the moderator-seeding gap flagged in the previous entry: the
+moderator account was never actually created on the VPS because
+`prisma/seed-moderator.ts` needs `ts-node`, correctly pruned as a dev
+dependency from the production image (`npm prune --omit=dev`) — leaving
+no way to run it there.
+
+**Fix**: rewrote it as `prisma/seed-moderator.js`, plain CommonJS —
+`require()` instead of `import`, no types. Its three real dependencies
+(`dotenv`, `bcryptjs`, `@prisma/client`) are all regular `dependencies`
+already present post-prune, so plain `node` runs it with nothing extra
+installed. `package.json`'s `seed:moderator` script changed from
+`ts-node prisma/seed-moderator.ts` to `node prisma/seed-moderator.js`.
+**No Dockerfile change needed** — `prisma/` is already copied whole into
+the runtime image (`COPY --from=builder /app/prisma ./prisma`), so the
+new file rides along automatically.
+
+**Verified the fix addresses the actual reported gap, not just "the script
+runs somewhere"**: built the real production image locally, confirmed
+`ts-node` is genuinely absent from it (`which ts-node` → not found, same
+as the VPS), and ran `npm run seed:moderator` **inside that exact pruned
+image** against a local Postgres — succeeded. Rebuilt/pushed the same
+image to the VPS (`docker save` → `scp` → `docker load`, the same
+transfer workflow Step 20 established, since this VPS's own Docker build
+still hangs — see that entry) and recreated `comments_backend` from it
+(hit the same `docker-compose` v1.29.2 `KeyError: 'ContainerConfig'`
+recreate bug as every prior redeploy on this host; same `docker rm -f`
+workaround).
+
+**Seeded for real** on the VPS using the **existing** `MODERATOR_PASSWORD`
+already in `backend/.env` (the one generated during Step 20 — not
+regenerated, per the task's own instruction) —
+`docker exec comments_backend npm run seed:moderator` → moderator account
+created.
+
+**Verified end-to-end on the live production site**
+(`https://comments.dedstream.in.ua`, real browser, not just GraphQL
+curl): logged in as moderator through the actual UI. Posted a test
+comment (careful to use an obviously-fake identity — the table already
+had one genuine real-user comment on it at the time, left completely
+untouched throughout). Expanded it, clicked **Hide** — vanished from the
+table immediately (`0` comments → back to the one real one). Called
+`banAuthor` (via an authenticated GraphQL request using the same
+moderator JWT the UI session held, since the hidden comment's row — and
+its Ban button — no longer renders once hidden) then attempted
+`createComment` as that exact identity — rejected with `FORBIDDEN`,
+`"This author (username + e-mail) has been banned from commenting."`,
+confirming ban enforcement is live, not just the `isBanned` flag getting
+set. Cleaned up afterward: deleted the test comment + author row directly
+via `psql` (same pattern as prior test-data cleanups in this log) and
+cleared the `rootComments:*` Redis cache; confirmed via a fresh page load
+that the site shows only the one genuine comment again.
+
+**Noted, not fixed (pre-existing, unrelated to this task)**: filling and
+submitting the comment form via Playwright intermittently hit a
+click-interception retry loop between the collapsed-prompt row and the
+page container, on both this task's test post and the previous
+`ALLOWED_ORIGIN` verification's — worked around each time by dispatching
+the click programmatically (`element.click()` in-page) instead of a
+simulated pointer click. Never reproduced as a real user-facing issue
+(mouse-driven clicks in manual testing across every prior session worked
+fine), and not chased further here since it's orthogonal to what this
+step was fixing — flagged in case it recurs somewhere more visible.
+
+**Delivery checklist status**: moderator login/hide/ban now genuinely
+work on the live deployment, not just in local dev. Only demo data
+curation and the demo video remain from the brief's "Delivery format"
+section.
+
+**Deviation**: none — scoped to the exact gap reported.
