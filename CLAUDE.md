@@ -3184,3 +3184,129 @@ pipeline expects.
   container uses.
 
 **Deviation**: none — scoped exactly to the one reported failure.
+
+---
+
+### Post-Step-20 — `ALLOWED_ORIGIN` tightened to the production frontend (done)
+
+The frontend went live on Vercel at `https://comments.dedstream.in.ua`
+(custom domain, DNS verified). Closes the last "temporary/wide-open"
+item from Step 20: the backend's `ALLOWED_ORIGIN` was `*` for pre-launch
+verification; now `https://comments.dedstream.in.ua`.
+
+**Where `ALLOWED_ORIGIN` is actually consumed** (checked before changing
+anything, per the task's own instruction): exactly one place,
+`backend/src/main.ts`'s `app.enableCors({ origin: config.get('ALLOWED_ORIGIN')
+?? true, credentials: true })` — covers the GraphQL endpoint and the
+`/uploads/*` static file route (same Express app). It does **not** gate
+`modules/gateway/comments.gateway.ts`'s Socket.IO server, which has its
+own, separate `@WebSocketGateway({ cors: { origin: true } })` — confirmed
+via `grep -rn ALLOWED_ORIGIN backend/src`, only one hit outside the env
+validation/`.env.example` declarations.
+
+**This wide-open socket CORS is not a deploy leftover** — it's the
+original, documented Step 5 design: no auth on the socket, one broadcast
+room, only already-public comment data flows over it, no credentials. Not
+changed here since it wasn't asked for and doesn't share the same risk
+profile as the GraphQL/uploads surface `ALLOWED_ORIGIN` protects (which
+carries the moderator JWT via `Authorization` header and `credentials:
+true`). Flagged for the user as a known, low-risk, intentional gap — not
+silently left unmentioned, and not changed unilaterally either.
+
+**Applied**: `sed`-edited `ALLOWED_ORIGIN` in `/opt/dedcomments/backend/.env`
+on the VPS, then `docker-compose -f docker-compose.prod.yml up -d backend`
+to pick it up (no rebuild needed — plain env var). Hit the same
+`docker-compose` v1.29.2 `KeyError: 'ContainerConfig'` recreate bug as
+Step 20 (`docker rm -f` the old container first, then `up -d` does a
+fresh create instead of a recreate — same workaround, now clearly a
+recurring quirk of this specific compose version whenever the backend
+container needs replacing).
+
+**Verified — CORS**: `OPTIONS` preflight against `comments-api.dedstream.in.ua/graphql`
+with `Origin: https://comments.dedstream.in.ua` gets
+`Access-Control-Allow-Origin: https://comments.dedstream.in.ua`; the same
+request with `Origin: https://evil.example.com` gets the **same fixed**
+header value back (not a reflected `evil.example.com`) — correct behavior
+for a string-configured CORS origin: a real browser at that other origin
+would reject the mismatched header and block the response, even though
+curl (which doesn't enforce CORS) shows `204` either way.
+
+**Verified — real end-to-end, via an actual browser (Playwright) against
+the live production URL**, not just curl:
+- Page loads with zero console errors, "Live" indicator shows connected.
+- Fetched a fresh `captchaChallenge` via `fetch()` from the page's own
+  console context (real cross-origin request, browser-enforced CORS) —
+  succeeded with no CORS error, confirming the tightened origin is
+  correctly permitted for actual browser traffic, not just curl.
+- Filled in and submitted the real comment form (CAPTCHA answer read from
+  Redis for the exact token the page itself had requested) — "Comment
+  posted.", the new row appeared in the table live, count went to
+  "1 comment". Cleaned up afterward (this was a test comment, not real
+  content) by deleting it directly via `psql` (author + comment rows) and
+  clearing the `rootComments:*` Redis cache so no stale reference lingered
+  — confirmed the site shows "0 comments" again on a fresh load.
+
+**A real, separate finding surfaced during this verification, investigated
+before concluding anything** — the browser console showed intermittent
+WebSocket errors (`ERR_CONNECTION_REFUSED`, then `Unexpected response
+code: 502`) on the `wss://.../socket.io/?EIO=4&transport=websocket`
+upgrade, even though the "Live" indicator ended up connected (Socket.IO
+had fallen back to/recovered via polling). Root-caused rather than
+dismissed:
+- A raw HTTP-level upgrade attempt with no valid Engine.IO session,
+  straight to the backend, correctly failed — not a bug, just an invalid
+  handshake (Socket.IO requires a polling handshake first).
+- A **properly sequenced** handshake (polling first to get a `sid`, then
+  upgrade with it) succeeded cleanly — `101 Switching Protocols` — both
+  directly against `127.0.0.1:4001` and through nginx over
+  `https://comments-api.dedstream.in.ua`, repeated **8/8** through nginx
+  with zero failures.
+- Cross-referencing nginx's error log: the failures cluster either (a)
+  around VPS reboot boundaries (see below — a few seconds of
+  `connect() failed` while the container restarts is expected and
+  self-heals), or (b) from one specific external client IP hitting
+  **both** this domain's `/socket.io/` *and* `api.dedstream.in.ua/graphql`
+  (DedStream's own, intentionally-stopped endpoint) on a steady ~11-second
+  cadence — almost certainly an external uptime-monitor/scanner, not real
+  user traffic, and its failures against DedStream's stopped backend are
+  entirely expected.
+- Conclusion: the WebSocket layer is genuinely functional (manual
+  handshake tests, and the real end-to-end browser flow, both succeeded);
+  `ALLOWED_ORIGIN` tightening has no code-level path to affecting it
+  (confirmed above); the sporadic errors seen are pre-existing background
+  noise (reboot-boundary blips + external monitor traffic against a
+  deliberately-stopped sibling service), not a regression from this
+  change. Not chased further, since reproducing/fixing "an external
+  scanner occasionally sees a refused connection during a ~2 second reboot
+  window" isn't a real defect to fix.
+
+**A new, unrelated but important operational finding**: the VPS is on
+what looks like a **provider-enforced ~30-minute reboot cycle** — a 4th
+clean `systemd-poweroff`→boot cycle was observed live during this step's
+own verification (uptime read "4 min" partway through), on top of the 3
+found during Step 20. Every occurrence brings DedStream's containers back
+via `restart: always`; re-stopped again (`docker start`/`stop
+postgres redis dedstream-app` — same restore command as Step 20). This is
+outside this project's control from inside the guest; worth raising with
+the VPS provider if it needs to stop.
+
+**Also discovered while cleaning up the test comment (unrelated to
+`ALLOWED_ORIGIN`, noted here rather than silently fixed)**: the moderator
+account was never actually seeded on this VPS — Step 20 set
+`MODERATOR_PASSWORD` in `backend/.env` but never ran
+`npm run seed:moderator`, and running it now fails (`ts-node: not found`
+— it's a dev dependency, pruned from the production image via `npm prune
+--omit=dev`). Moderator login (hide/ban) is consequently **not currently
+usable** on this deployment. Not fixed here (out of scope for this
+step — it's a pre-existing gap from Step 20, not something
+`ALLOWED_ORIGIN` tightening touches); flagged for a follow-up (either seed
+via a one-off `docker run` against a build-stage image that still has
+`ts-node`, or add a compiled/`node`-runnable seed path).
+
+**Delivery checklist status**: with this done, everything in the brief's
+"Delivery format" section is complete except **demo data curation** and
+**recording the actual demo video** — both explicitly still pending.
+
+**Deviation**: none from what was asked; the moderator-seed and
+socket-CORS findings are flagged, not acted on unilaterally, since neither
+was part of this step's actual scope.
