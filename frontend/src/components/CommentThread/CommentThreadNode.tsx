@@ -76,6 +76,14 @@ interface CommentThreadNodeProps {
    * (shown only at `MAX_VISUAL_DEPTH` with replies) is clicked — pushes onto
    * `CommentThread`'s `rerootStack` so that node becomes the new depth-0 view. */
   onContinueThread: (id: string) => void;
+  /** True only for the true (non-re-rooted) root, whose text/attachment are
+   * already shown directly in its `RootCommentsTable` row — see
+   * `CommentThread`'s doc comment. Suppresses just the `.text`/`.attachment`
+   * blocks so they aren't rendered twice; meta (avatar/username/date, needed
+   * for the connector's anchor point) and actions (Reply/Hide/Ban/collapse)
+   * still render — expanding the thread is still the only place to act on
+   * the root comment itself. */
+  hideOwnContent?: boolean;
 }
 
 /**
@@ -99,7 +107,7 @@ interface CommentThreadNodeProps {
  * and `CommentThread`'s re-rooting stack.
  */
 export function CommentThreadNode(props: CommentThreadNodeProps) {
-  const { node, depth, onReplyPosted, onContinueThread } = props;
+  const { node, depth, onReplyPosted, onContinueThread, hideOwnContent = false } = props;
   const [collapsed, setCollapsed] = useState(false);
   const [replying, setReplying] = useState(false);
   const [replyClosing, setReplyClosing] = useState(false);
@@ -247,14 +255,16 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           )}
         </div>
 
-        <div
-          className={cls.text}
-          // previewCommentHtml is the same allowlist renderer the form's live
-          // preview uses — safe here too: it only ever un-escapes the exact
-          // tags the backend already validated this text against on submit.
-          dangerouslySetInnerHTML={{ __html: previewCommentHtml(node.text) }}
-        />
-        {node.attachment && (
+        {!hideOwnContent && (
+          <div
+            className={cls.text}
+            // previewCommentHtml is the same allowlist renderer the form's live
+            // preview uses — safe here too: it only ever un-escapes the exact
+            // tags the backend already validated this text against on submit.
+            dangerouslySetInnerHTML={{ __html: previewCommentHtml(node.text) }}
+          />
+        )}
+        {!hideOwnContent && node.attachment && (
           <div className={cls.attachment}>
             <AttachmentPreview
               type={node.attachment.type}

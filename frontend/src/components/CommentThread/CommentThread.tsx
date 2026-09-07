@@ -143,6 +143,13 @@ export function CommentThread(props: CommentThreadProps) {
           void refetch();
         }}
         onContinueThread={continueThread}
+        // The true root's own text/attachment are already shown directly in
+        // its RootCommentsTable row (always visible, no click needed — see
+        // that component) — repeating them here would just duplicate what's
+        // already on screen. A re-rooted view ("Continue this thread") is
+        // different: that view root's content was never shown anywhere else,
+        // so it still needs to render normally.
+        hideOwnContent={rerootStack.length === 0}
       />
     </div>
   );

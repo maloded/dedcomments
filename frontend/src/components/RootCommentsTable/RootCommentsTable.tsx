@@ -13,7 +13,15 @@ import { Skeleton } from "@/shared/ui/Skeleton";
 import { Button } from "@/shared/ui/Button";
 import { Avatar } from "@/shared/ui/Avatar";
 import { CommentThread } from "@/components/CommentThread";
+import { AttachmentPreview } from "@/components/AttachmentPreview";
+import { previewCommentHtml } from "@/shared/lib/commentPreview";
 import cls from "./RootCommentsTable.module.scss";
+
+// Past this many characters, a root comment's own text is clamped to a few
+// lines with a "Show more" toggle — a rough heuristic (no layout measurement),
+// good enough to keep one very long comment from blowing out the table's row
+// rhythm without needing a ResizeObserver for something this low-stakes.
+const TEXT_TRUNCATE_THRESHOLD = 280;
 
 const SORTABLE_COLUMNS: { field: RootCommentSortField; label: string }[] = [
   { field: "USERNAME", label: "Username" },
@@ -90,6 +98,12 @@ interface RootCommentRowProps {
  */
 const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) {
   const { item, expanded, onToggleExpand } = props;
+  // Purely local — collapsing/re-expanding *this row's own text* never needs
+  // a network request (the text is already in hand), so it doesn't share any
+  // state with `expanded` (which gates the *replies* fetch/render below).
+  const [textExpanded, setTextExpanded] = useState(false);
+  const hasReplies = item.repliesCount > 0;
+  const isLongText = item.text.length > TEXT_TRUNCATE_THRESHOLD;
 
   return (
     <Fragment>
@@ -110,17 +124,54 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
           {item.repliesCount}
         </td>
         <td className={cls.expandCell}>
-          <Button
-            size="sm"
-            variant="clear"
-            aria-expanded={expanded}
-            onClick={() => onToggleExpand(item.id)}
-          >
-            {expanded ? "Collapse" : "Expand"}
-          </Button>
+          {/* Only reveals nested replies (commentThread) — the comment's own
+           * text/attachment below is always visible, no click needed. */}
+          {hasReplies && (
+            <Button
+              size="sm"
+              variant="clear"
+              aria-expanded={expanded}
+              onClick={() => onToggleExpand(item.id)}
+            >
+              {expanded ? "Collapse" : "Expand"}
+            </Button>
+          )}
         </td>
       </tr>
-      {expanded && (
+
+      {/* The root comment's own content — always rendered, independent of
+       * `expanded`, matching the brief's reference screenshot (comment text
+       * visible immediately, not gated behind a click). */}
+      <tr className={cls.contentRow}>
+        <td colSpan={5} className={cls.contentCell}>
+          <div
+            className={classNames(cls.commentText, {
+              [cls.textClamped]: isLongText && !textExpanded,
+            })}
+            dangerouslySetInnerHTML={{ __html: previewCommentHtml(item.text) }}
+          />
+          {isLongText && (
+            <button
+              type="button"
+              className={cls.textToggle}
+              onClick={() => setTextExpanded((v) => !v)}
+            >
+              {textExpanded ? "Show less" : "Show more"}
+            </button>
+          )}
+          {item.attachment && (
+            <div className={cls.contentAttachment}>
+              <AttachmentPreview
+                type={item.attachment.type}
+                url={item.attachment.url}
+                originalName={item.attachment.originalName}
+              />
+            </div>
+          )}
+        </td>
+      </tr>
+
+      {expanded && hasReplies && (
         <tr className={cls.threadRow}>
           <td colSpan={5} className={cls.threadCell}>
             <CommentThread rootId={item.id} />

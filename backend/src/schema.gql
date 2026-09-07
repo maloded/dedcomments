@@ -48,6 +48,7 @@ type CaptchaChallengeModel {
 }
 
 type CommentModel {
+  attachment: AttachmentModel
   author: AuthorModel!
   createdAt: DateTime!
   id: ID!

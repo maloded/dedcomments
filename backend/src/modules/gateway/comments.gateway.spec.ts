@@ -33,6 +33,7 @@ describe('CommentsGateway', () => {
 				isBanned: false,
 				createdAt: new Date(),
 			},
+			attachment: null,
 			repliesCount: 0,
 			createdAt: new Date(),
 		} satisfies CommentModel;

@@ -185,6 +185,39 @@ describe('CommentsService', () => {
 			expect(createArg.data.authorId).toBe('author-1');
 		});
 
+		it('links an attachment and returns it on the created model', async () => {
+			prisma.attachment.findUnique.mockResolvedValue({
+				id: 'att-1',
+				commentId: null,
+			});
+			prisma.attachment.update.mockResolvedValue({
+				id: 'att-1',
+				type: 'IMAGE',
+				url: '/uploads/att-1.png',
+				originalName: 'cat.png',
+				size: 1234,
+				processedAt: new Date('2026-01-03T00:00:00Z'),
+			});
+
+			const result = await service.createComment({
+				...baseInput(),
+				attachmentId: 'att-1',
+			});
+
+			expect(prisma.attachment.update).toHaveBeenCalledWith({
+				where: { id: 'att-1' },
+				data: { commentId: 'comment-1' },
+			});
+			expect(result.attachment).toEqual({
+				id: 'att-1',
+				type: 'IMAGE',
+				url: '/uploads/att-1.png',
+				originalName: 'cat.png',
+				size: 1234,
+				processedAt: new Date('2026-01-03T00:00:00Z'),
+			});
+		});
+
 		it('propagates a sanitizer rejection', async () => {
 			sanitizer.sanitize.mockImplementation(() => {
 				throw new BadRequestException('bad markup');
@@ -357,6 +390,45 @@ describe('CommentsService', () => {
 			expect(page.totalPages).toBe(2); // ceil(30 / 25)
 			expect(page.page).toBe(1);
 		});
+
+		it(
+			"includes each root comment's own attachment (or null), so a row's " +
+				'content is visible without fetching its thread',
+			async () => {
+				prisma.comment.findMany.mockResolvedValue([
+					rootRow({
+						id: 'with-attachment',
+						attachment: {
+							id: 'att-1',
+							type: 'IMAGE',
+							url: '/uploads/att-1.png',
+							originalName: 'cat.png',
+							size: 1234,
+							processedAt: new Date('2026-01-03T00:00:00Z'),
+						},
+						_count: { replies: 0 },
+					}),
+					rootRow({ id: 'no-attachment', _count: { replies: 0 } }),
+				]);
+
+				const page = await service.getRootComments(args());
+
+				expect(page.items[0].attachment).toEqual({
+					id: 'att-1',
+					type: 'IMAGE',
+					url: '/uploads/att-1.png',
+					originalName: 'cat.png',
+					size: 1234,
+					processedAt: new Date('2026-01-03T00:00:00Z'),
+				});
+				expect(page.items[1].attachment).toBeNull();
+
+				const [findArg] = prisma.comment.findMany.mock.calls.at(0) as [
+					{ include: { attachment?: boolean } },
+				];
+				expect(findArg.include.attachment).toBe(true);
+			},
+		);
 
 		it('on a cache MISS: queries the DB then writes the cache', async () => {
 			cache.getJson.mockResolvedValue(null);

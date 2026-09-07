@@ -33,6 +33,7 @@ interface CommentCreatedPayload {
   createdAt: string;
   repliesCount: number;
   author: { id: string; username: string; email: string };
+  attachment: { id: string; type: "IMAGE" | "TEXT"; url: string; originalName: string } | null;
 }
 
 interface CommentHiddenPayload {
@@ -198,6 +199,15 @@ function handleRootCommentCreated(client: ApolloClient, comment: CommentCreatedP
             username: comment.author.username,
             email: comment.author.email,
           },
+          attachment: comment.attachment
+            ? {
+                __typename: "AttachmentModel",
+                id: comment.attachment.id,
+                type: comment.attachment.type,
+                url: comment.attachment.url,
+                originalName: comment.attachment.originalName,
+              }
+            : null,
         } as RootCommentsQuery["rootComments"]["items"][number];
 
         const items = [newItem, ...data.rootComments.items];

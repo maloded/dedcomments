@@ -63,15 +63,22 @@
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
+  // A comment is a (meta row, content row) pair that reads as one visual
+  // block — the divider belongs after the content row, not sandwiched
+  // between the two.
+  tbody tr:has(+ .contentRow) td {
+    border-bottom: none;
+  }
+
   tbody tr:last-child td {
     border-bottom: none;
   }
 
-  tbody tr:not(.threadRow) {
+  tbody tr:not(.threadRow):not(.contentRow) {
     transition: background-color var(--dur-fast) ease;
   }
 
-  tbody tr:not(.threadRow):hover {
+  tbody tr:not(.threadRow):not(.contentRow):hover {
     background: var(--color-row-hover);
   }
 }
@@ -107,6 +114,59 @@
 .expandCell {
   text-align: right;
   width: 1%;
+}
+
+// The root comment's own text/attachment — always visible, right under its
+// meta row, independent of the Expand/replies state.
+.contentRow > .contentCell {
+  padding-top: 0;
+  padding-bottom: var(--space-3);
+  white-space: normal;
+}
+
+.commentText {
+  color: var(--color-text);
+  font: var(--font-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+
+  a {
+    color: var(--color-link);
+  }
+
+  :global(code) {
+    background: var(--color-code-bg);
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-1);
+    font-family: var(--font-family-mono);
+    font-size: 0.9em;
+  }
+}
+
+.textClamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.textToggle {
+  margin-top: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-accent);
+  font: var(--font-xs);
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.contentAttachment {
+  margin-top: var(--space-2);
 }
 
 .threadRow > .threadCell {
@@ -232,14 +292,24 @@
       display: block;
     }
 
-    tbody tr:not(.threadRow) {
-      padding: var(--space-3) 0;
+    // A comment is a (meta row, content row) pair — tight together, with the
+    // usual gap only *between* comments (i.e. after the content row).
+    tbody tr:not(.threadRow):not(.contentRow) {
+      padding: var(--space-3) 0 0;
+    }
+
+    tbody tr.contentRow {
+      padding: var(--space-1) 0 var(--space-3);
     }
 
     tbody td {
       padding: 0;
       border-bottom: none;
       white-space: normal;
+    }
+
+    .contentCell {
+      padding: 0;
     }
 
     // Label each stacked field with its column name (inline pseudo-element, so
@@ -273,9 +343,14 @@
       height: 22px;
     }
 
+    // Only meaningful when a button actually renders inside it (hidden
+    // entirely when repliesCount is 0) — an empty cell shouldn't reserve a gap.
     .expandCell {
       text-align: left;
-      margin-top: var(--space-1);
+
+      &:has(button) {
+        margin-top: var(--space-1);
+      }
     }
   }
 }

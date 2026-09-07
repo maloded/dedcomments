@@ -3,7 +3,7 @@ import {
 	Injectable,
 	NotFoundException,
 } from '@nestjs/common';
-import type { Author, Comment, Prisma } from '@prisma/client';
+import type { Attachment, Author, Comment, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
@@ -24,9 +24,11 @@ import { RootCommentSortField } from './enums/root-comment-sort-field.enum';
 import type { CommentModel } from './models/comment.model';
 import type { RootCommentsPage } from './models/root-comments-page.model';
 import type { ThreadCommentModel } from './models/thread-comment.model';
+import type { AttachmentModel } from '../attachments/models/attachment.model';
 
 type CommentWithRelations = Comment & {
 	author: Author;
+	attachment: Attachment | null;
 	_count: { replies: number };
 };
 
@@ -99,6 +101,7 @@ export class CommentsService {
 				take: ROOT_COMMENTS_PER_PAGE,
 				include: {
 					author: true,
+					attachment: true,
 					_count: {
 						select: { replies: { where: { isHidden: false } } },
 					},
@@ -232,28 +235,35 @@ export class CommentsService {
 			homepage: input.homepage,
 		});
 
-		const comment = await this.prismaService.$transaction(async tx => {
-			const created = await tx.comment.create({
-				data: {
-					text,
-					parentId: input.parentId ?? null,
-					authorId: author.id,
-				},
-				include: {
-					author: true,
-					_count: { select: { replies: true } },
-				},
-			});
-
-			if (input.attachmentId) {
-				await tx.attachment.update({
-					where: { id: input.attachmentId },
-					data: { commentId: created.id },
+		const comment = await this.prismaService.$transaction(
+			async (tx): Promise<CommentWithRelations> => {
+				const created = await tx.comment.create({
+					data: {
+						text,
+						parentId: input.parentId ?? null,
+						authorId: author.id,
+					},
+					include: {
+						author: true,
+						_count: { select: { replies: true } },
+					},
 				});
-			}
 
-			return created;
-		});
+				// The attachment is linked *after* the comment is created (it
+				// doesn't exist yet beforehand), so `created`'s own `include`
+				// can't see it — the just-updated row from this call is the
+				// attachment to attach to the model instead of re-querying.
+				let attachment: Attachment | null = null;
+				if (input.attachmentId) {
+					attachment = await tx.attachment.update({
+						where: { id: input.attachmentId },
+						data: { commentId: created.id },
+					});
+				}
+
+				return { ...created, attachment };
+			},
+		);
 
 		// Any new comment changes the root list — a new root adds a row and bumps
 		// totalCount; a reply bumps its root's repliesCount. Simplest correct
@@ -288,6 +298,7 @@ export class CommentsService {
 			data: { isHidden: true },
 			include: {
 				author: true,
+				attachment: true,
 				_count: { select: { replies: { where: { isHidden: false } } } },
 			},
 		});
@@ -379,8 +390,22 @@ export class CommentsService {
 			text: comment.text,
 			parentId: comment.parentId,
 			author: comment.author,
+			attachment: comment.attachment
+				? CommentsService.attachmentToModel(comment.attachment)
+				: null,
 			repliesCount: comment._count.replies,
 			createdAt: comment.createdAt,
+		};
+	}
+
+	private static attachmentToModel(attachment: Attachment): AttachmentModel {
+		return {
+			id: attachment.id,
+			type: attachment.type,
+			url: attachment.url,
+			originalName: attachment.originalName,
+			size: attachment.size,
+			processedAt: attachment.processedAt,
 		};
 	}
 

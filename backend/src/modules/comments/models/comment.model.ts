@@ -1,10 +1,12 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
 import { AuthorModel } from '../../authors/models/author.model';
+import { AttachmentModel } from '../../attachments/models/attachment.model';
 
 /**
- * A single comment. The root-list query (next step) returns these with
- * `repliesCount` populated but no nested `replies`; the thread query will return
- * a nested variant.
+ * A single comment. The root-list query returns these with `repliesCount` and
+ * the comment's own `attachment` populated, but no nested `replies` — a root
+ * row's own text/attachment must be visible without fetching its subtree (see
+ * CLAUDE.md's fix entry for this); the thread query returns a nested variant.
  */
 @ObjectType()
 export class CommentModel {
@@ -22,6 +24,9 @@ export class CommentModel {
 
 	@Field(() => AuthorModel)
 	public author: AuthorModel;
+
+	@Field(() => AttachmentModel, { nullable: true })
+	public attachment: AttachmentModel | null;
 
 	@Field(() => Int, {
 		description:
