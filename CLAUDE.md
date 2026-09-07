@@ -3946,3 +3946,78 @@ inventing a change for a bug that doesn't reproduce.
 
 **No code change made.** `git status` is clean relative to the previous
 commit; nothing to fix.
+
+---
+
+### Step 22 — longer, multi-paragraph demo comments added on top of the
+existing 91 (done)
+
+Addressed feedback that Step 21's dataset read as too short/single-line
+throughout — every root and reply comment was one sentence. Purely
+additive: never truncated anything, ran directly against the existing 91
+comments.
+
+**New script, not a mode of the existing one**:
+`backend/scripts/seed-long-comments.mjs` — small and self-contained
+(CAPTCHA-solving/GraphQL/throttle-backoff plumbing copied from
+`seed-comments.mjs` rather than shared, since this is a one-off addition,
+not a second general-purpose generator). 7 new root comments, all
+genuinely multi-sentence/multi-paragraph (`\n\n` between paragraphs — both
+`RootCommentsTable`'s `.commentText` and `CommentThreadNode`'s `.text` are
+already `white-space: pre-wrap`, so this needed no CSS change, just real
+paragraph breaks in the seeded text), plus 4 replies (2 of them also
+multi-paragraph) spread across 4 of the new roots. Two roots and one reply
+embed an allowed tag **naturally mid-paragraph** rather than as the whole
+comment — a `<code>useMemo</code>` aside in a debugging story, an
+`<a href="…" title="…">this overview</a>` link partway through a
+networking post, `<strong>`/`<i>` in a longer review — a more realistic
+demonstration than a single short tagged sentence (which Step 21's set
+already had plenty of). New identities (`MarcusWebb`, `PriyaKapoor`, …),
+deliberately distinct from Step 21's pool so the two batches don't get
+confused with each other when reading the table. Timestamps spread across
+the last ~72 hours (recent, not backdated into the older 24-day span —
+these genuinely are newly-added comments) via the same
+direct-Prisma-`UPDATE` second pass as Step 21.
+
+**Validated locally first** (same discipline as every session touching
+production this far): ran the full script against the local dev stack,
+confirmed via the actual frontend before ever touching the VPS — the
+"Show more" clamp correctly triggers on the new long roots (and only
+those), expanding one shows the real paragraph break as a visible gap, and
+a long reply (`WillaFrost`, 2 paragraphs) renders correctly nested inside
+its thread. Zero console errors.
+
+**Deployed the same way as Step 21**: `git commit`+`push` first (clean
+tree, no stash needed this time — nothing else had drifted), `git pull` on
+`/opt/dedcomments`, `docker cp` the new script into the already-running
+`comments_backend` container (still no volume mount for `scripts/`), run
+via `docker exec` against `https://comments-api.dedstream.in.ua/graphql`.
+11 creates total (well under the 10/min throttle's steady-state — one
+single 60s backoff was hit near the end, exactly as expected for a batch
+this size). Comment count went from 91 → 102 (30 → 37 roots); confirmed via
+direct count query both before and after.
+
+**Verified — the real live site** (Playwright, real user-facing checks,
+not just DOM presence): the two-paragraph `TheoLindgren` root, expanded,
+shows a genuine visual paragraph gap with the `this overview` link
+correctly styled and clickable mid-sentence; `PriyaKapoor`'s root **and**
+its `NateOkafor` reply both render `<code>useMemo</code>` as a real
+monospace/dark-background chip; the `MarcusWebb`→`WillaFrost` reply shows
+its own two-paragraph structure correctly nested inside the thread view
+(replies aren't clamped — only the root table clamps, matching the
+existing, unchanged design). New comments interleave naturally by date
+with the existing 91 (sorted correctly, most-recent-first). Zero console
+errors throughout.
+
+**Result**: **7 long roots + 4 long replies (11 added)**, comment count
+**91 → 102** (**30 → 37 roots**). Two roots and one reply use an allowed
+tag embedded naturally inside longer text, on top of Step 21's already-
+verified short-form tagged replies.
+
+**Delivery checklist status**: demo data is now considered feature-
+complete for the video — realistic identities, deep threading with
+"Continue this thread", attachments (image resize + text files), HTML-
+tagged text (both short sentences and embedded mid-paragraph), and now
+genuine multi-paragraph long-form comments at both the root and reply
+level. Pending final manual sign-off before recording; only the demo video
+itself remains from the brief's "Delivery format" section.
