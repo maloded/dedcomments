@@ -3892,3 +3892,57 @@ threading + "Continue this thread", attachments with visible resize,
 HTML-tagged rendering, multi-page sorting) now has real, natural-looking
 data behind it on the actual deployed instance. Only the demo video itself
 remains from the brief's "Delivery format" section.
+
+---
+
+### Investigation — seeded HTML-tagged replies "not rendering" on production
+(no code change; false alarm)
+
+Reported gap: none of the ~10 replies the seed script (Step 21) tagged
+with `<strong>`/`<i>`/`<code>`/`<a href title>` were showing any visible
+formatting on the live site — allegedly all rendering as plain text.
+Diagnosed in the order the report itself laid out — data first, then
+rendering — before changing anything, per its own explicit instruction.
+
+**Data — confirmed correct, not the cause.** Queried the production DB
+directly (`SELECT ... WHERE text LIKE '%<%'`): all 10 tagged comments have
+the literal tags stored exactly as the seed script wrote them
+(`This is <strong>exactly</strong> the right call…`, `<code>useMemo</code>`,
+`<i>underrated</i>`, `<a href="https://developer.mozilla.org"
+title="MDN Web Docs">MDN</a>`, `<strong>Huge</strong> improvement…`), and
+every one of them has a non-null `parentId` — correctly replies, never
+roots, exactly matching the script's `buildShallowReplies`/`buildDeepChain`
+design (HTML only ever goes on replies, per the task's own §2.5).
+
+**Rendering — also confirmed correct, not the cause.** `CommentThreadNode`
+uses the exact same `previewCommentHtml` allowlist renderer
+`RootCommentsTable` does (`dangerouslySetInnerHTML={{ __html:
+previewCommentHtml(node.text) }}`) — same shared, pure function, no
+render-path divergence to find. Inspected the *live* production DOM
+directly rather than trusting that reasoning alone: every one of the 5
+distinct tagged strings (covering all 10 tagged comments — several strings
+repeat) renders as a genuine HTML element, not escaped literal text —
+`<strong>` computed `font-weight: 700`, `<code>` a monospace font-family +
+dark background, `<i>` `font-style: italic`, and the `<a>` a real anchor
+with correct `href`/`title`, visibly link-colored in a screenshot. One of
+the five (the MDN link, deep in the depth-11 chain past
+`MAX_VISUAL_DEPTH`) needed a "Continue this thread" click to even be in
+the DOM at all — clicked through, confirmed it renders identically once
+revealed. Zero console errors throughout.
+
+**Conclusion**: this doesn't currently reproduce. Neither the data nor the
+rendering path has a defect — every tagged reply, by every distinct string
+in the seeded set, displays correctly on the real live site right now.
+Most likely explanation (not confirmed, since the original observation
+wasn't reproducible to trace further): the report was made either mid-way
+through the ~13-minute seeding run (before every tagged reply existed
+yet), or from a quick pass that didn't expand any threads far enough to
+actually reach the tagged replies in the first place (4 of the 5 distinct
+strings sit under an individually-`Expand`ed shallow thread; the fifth
+needs a `Continue this thread` click on top of that). Matches this
+project's own prior "investigate first" precedent (the "Choose File
+button unclickable" false alarm, above) — reported back rather than
+inventing a change for a bug that doesn't reproduce.
+
+**No code change made.** `git status` is clean relative to the previous
+commit; nothing to fix.
