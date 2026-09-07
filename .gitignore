@@ -46,3 +46,7 @@ Thumbs.db
 # ─── Uploads (local attachment storage) ──────────────────────────────────────
 backend/uploads/
 .playwright-mcp/
+
+# ─── Demo data source images (local-only, transferred to the VPS by hand for
+# seed-comments.mjs — not part of the repo) ────────────────────────────────
+/demo-images/
