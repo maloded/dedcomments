@@ -3694,7 +3694,63 @@ session).
 explicit fix suggestion (the task's diagnosis was correct on the first
 read: a naive length heuristic instead of real overflow detection).
 
-**Pending — unchanged**: this fix is local-only so far (not yet deployed
-to the VPS/Vercel); demo data curation, the demo video, and the production
-backend picking up this specific fix (next time the backend/frontend get
-redeployed) remain open.
+**Pending, at the time this fix landed**: not yet deployed. Deployed
+immediately after — see the follow-up entry below.
+
+---
+
+### This fix deployed to production (done)
+
+Frontend-only change (confirmed via `git show 432ac1e --stat` before doing
+anything — only `RootCommentsTable.tsx` + this file), so unlike the
+`attachment`-field fix two entries up, this needed no backend/VPS
+involvement at all: `git push origin main` is sufficient, since the Vercel
+project auto-deploys its production alias on every push to `main`.
+
+**Confirmed the deployment actually completed**, not just that the push
+succeeded — `gh api repos/maloded/dedcomments/commits/432ac1e/status` and
+`.../deployments` showed a `Production`-environment Vercel deployment for
+this exact commit, state `success`, completed within ~30s of the push.
+
+**A cache-header red herring, resolved by re-deriving the timeline rather
+than guessing**: `curl -I` against the live domain kept showing
+`x-vercel-cache: HIT` with a steadily-climbing `age` header, which first
+looked like the custom domain was still serving a stale, pre-deploy
+response. Chased it down (dig against both resolved edge IPs — same cached
+`age` on both, ruling out a PoP-propagation gap) before concluding
+anything, then reconstructed the actual timeline: the `age`-vs-`date`
+header math placed this cache entry's creation at ~13 seconds *after* the
+deployment's own recorded completion time — meaning the "stale-looking"
+response was, in fact, already the new deployment; there was nothing stale
+to chase. Verified this conclusion functionally rather than trusting the
+header math alone (see below), since header archaeology on a caching layer
+this project doesn't control is exactly the kind of thing worth confirming
+by outcome, not just deduction.
+
+**Verified — functionally, against the real live site** (Playwright,
+`https://comments.dedstream.in.ua`, real user comments — `coffeeman`,
+`Harry`, `damatom`, `maloded`, `ded` — left untouched throughout): posted
+the same borderline ~210-character test comment used in local verification.
+At 1280px desktop: `scrollHeight === clientHeight` (40px both) → no
+toggle. Resized the same loaded page to 375px mobile, no reload:
+`scrollHeight` (100) now exceeds `clientHeight` (60) → "Show more" appears
+live — the exact ResizeObserver-driven behavior the fix implements,
+confirmed on the actual production deployment, not inferred from it having
+built successfully. Zero console errors throughout. Cleaned up afterward:
+confirmed the single matching row by id before deleting, removed
+`comments`/`authors` scoped to that one id/identity, cleared the
+`rootComments:*` Redis cache, reloaded fresh — test comment gone, real
+comments untouched.
+
+**Noticed, not investigated (out of this task's scope, flagged rather than
+silently ignored)**: two of the real existing production comments render
+oddly — one (`ded`, "Sep 7, 2026, 1:42 PM") shows literal `What&amp;` text
+instead of an ampersand, and another (`maloded`, "HO HO") shows a small
+broken-looking icon under its text. Neither relates to text-overflow
+detection (this task's actual scope) and neither is a new regression —
+both predate this deploy. Not chased further here; worth a look in a
+future session if it recurs or turns out to matter.
+
+**Deviation**: none — the task was "deploy this fix," and that's the
+entirety of what happened; the cache-header investigation was diligence
+before declaring success, not scope creep.
