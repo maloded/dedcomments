@@ -3532,3 +3532,92 @@ dataset next: **do not run `npm run test:e2e` locally against a dev
 Postgres holding data worth keeping** without first confirming
 `DATABASE_URL` isn't pointed at the same instance the docker-compose stack
 uses (it is, by default, in this project's `.env` setup).
+
+---
+
+### Post-Step-20 fix — production backend updated to the
+visible-root-comment-text schema (commit 8ed85a6) (done)
+
+Closed the gap the frontend/backend deploys had drifted into: the Vercel
+frontend auto-deployed commit 8ed85a6 (the `attachment` field on
+`CommentModel`) the moment it landed on `main`, but the VPS backend
+(`comments-api.dedstream.in.ua`) was still five commits behind at
+`aa3debb` (Step 19) — the live site was throwing `Cannot query field
+'attachment' on type 'CommentModel'` on every `rootComments` fetch.
+
+**Found before touching anything, not assumed**: `git status` on
+`/opt/dedcomments` showed an **uncommitted local modification to
+`backend/Dockerfile`** — turned out to be the abandoned first attempt at
+the sharp/libvips CPU-compatibility fix (`npm_config_build_from_source`,
+documented in Step 20's own entry as "did nothing"), left over on the VPS's
+working tree from that session and never reset. The *real* fix
+(node-gyp + `install/build.js` + Alpine-edge `vips-dev`/`vips-cpp`) was
+already properly committed to `main` as `3f6b11e`, confirmed by diffing it
+against the stray local change before deciding what to do with it. Stashed
+rather than discarded (`git stash push -- backend/Dockerfile`, left in the
+stash list, not dropped) so `git pull` could fast-forward cleanly without
+losing anything, however unlikely to matter again.
+
+**Deploy** (same local-build-and-transfer workflow as Step 20 — this VPS's
+Docker build engine still can't be assumed reliable for on-server builds,
+not re-tested since the risk/cost of re-hanging wasn't worth it for a
+confirmed-working workaround):
+- `git pull origin main` on the VPS — clean fast-forward `aa3debb..8ed85a6`
+  (20 files, including `CLAUDE.md`, `schema.gql`,
+  `comments.service.ts`/`comment.model.ts`, and the frontend files —
+  `docker-compose.prod.yml` is untracked/gitignored, untouched by the pull).
+- Checked `git log aa3debb..origin/main -- backend/prisma/migrations`
+  **before** assuming either way: empty — this change never touched
+  `schema.prisma` (the `Comment ↔ Attachment` relation already existed
+  since Step 4; the fix was purely `include: { attachment: true }` on
+  already-fetched Prisma queries plus the new GraphQL field). Ran
+  `prisma migrate deploy` anyway per the task's own instruction — "No
+  pending migrations to apply.", exactly as predicted.
+- Built `dedcomments_backend:latest` locally (dev machine, same `amd64`
+  architecture, confirmed via `docker image inspect`), `docker save | gzip`
+  → 187 MB (identical size to Step 20's own build, expected — same base
+  layers) → `scp` (~28s) → `docker load` on the VPS.
+- Hit the same `docker-compose` v1.29.2 recreate quirk every prior redeploy
+  on this host has — `docker rm -f comments_backend` first, then
+  `docker-compose -f docker-compose.prod.yml up -d backend` does a fresh
+  `create` instead of a `recreate`, sidestepping the `KeyError:
+  'ContainerConfig'` bug entirely (same workaround as every prior
+  redeploy entry in this log).
+
+**Verified — against the real live site, not just the container's own
+logs** (Playwright against `https://comments.dedstream.in.ua`, real user
+data already on the page — `coffeeman`/`Harry`/`damatom`/`ded`, left
+completely untouched throughout): zero console errors immediately on
+load (the `Cannot query field 'attachment'` error is gone); root comment
+text renders directly with the "Show more" truncation working on long
+real comments; posted a test comment (`deploycheck`) with a real image
+attachment through the actual form (CAPTCHA answer read from the
+production Redis via SSH, same method as every local verification in this
+log) — the attachment rendered inline in the table immediately, no reload;
+clicked its thumbnail — production's own `Lightbox` opened correctly.
+Cleaned up afterward: confirmed the exact single matching row by id before
+deleting (`SELECT ... WHERE username='deploycheck'` → exactly one row),
+deleted `attachments` → `comments` → `authors` scoped to that one id/
+identity (never a broad `DELETE`), cleared the `rootComments:*` Redis
+cache, then reloaded the live site fresh — back to exactly the 4 real
+comments, `deploycheck` gone, zero console errors.
+
+**Observation, flagged not acted on**: `docker images -f dangling=true` on
+the VPS shows **14 untagged images** (~1–3.8 GB apiece by content-addressed
+size, heavily deduplicated in practice) accumulated across every build
+attempt since Step 20 — disk is still at the same 80% / 4.8 GB free as
+Step 20 left it (Docker's layer dedup meant this redeploy added ~0 net
+disk), so not urgent, but `docker image prune` would reclaim real space if
+this VPS's headroom ever gets tighter. Not run here — wasn't part of what
+this task asked for, and pruning images on a production host unprompted
+felt like more than the scope warranted.
+
+**Deviation**: none from what was asked — the stashed (not discarded)
+stray Dockerfile diff was an investigate-first judgment call the task's
+own framing already anticipated ("navigate to /opt/dedcomments... pull the
+latest main"), not a scope change.
+
+**Delivery checklist status**: unchanged — demo data curation and the demo
+video remain from the brief's "Delivery format" section. Both the frontend
+(Vercel) and backend (this VPS) are now on the same commit (8ed85a6) for
+the first time since the visible-root-comment-text work began.
