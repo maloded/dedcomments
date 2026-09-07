@@ -3754,3 +3754,141 @@ future session if it recurs or turns out to matter.
 **Deviation**: none — the task was "deploy this fix," and that's the
 entirety of what happened; the cache-header investigation was diligence
 before declaring success, not scope creep.
+
+---
+
+### Step 21 — production data fully reset and re-curated for the demo
+video (done)
+
+Unlike every prior data-touching session (which preserved real user
+comments), this one deliberately wiped **all** existing production
+`comments`/`authors`/`attachments` — including the "ded" account and every
+other genuine comment accumulated since launch — and replaced them with a
+fully curated, realistic dataset built for recording the assignment's demo
+video. `moderators` was left untouched throughout.
+
+**`backend/scripts/seed-comments.mjs` rewritten**, not just extended —
+still built on the original's core pattern (real `createComment` mutations,
+CAPTCHA solved by reading the answer out of Redis, throttle-aware retry
+with a 60s backoff), but now also:
+- **Realistic identities**: `USERNAME_REGEX` is `/^[a-zA-Z0-9]+$/`
+  (checked before writing any names — no underscores/dots/spaces allowed),
+  so identities are CamelCase-style handles (`AlexMorgan`, `SarahChen99`, …)
+  instead of the old NATO-alphabet test list (`Zed`/`india`/`Juliet`/…,
+  a sorting-test artifact, not demo-appropriate) or `user1788…`-style ids.
+  ~1/3 get a `homepage` (GitHub or a `<name>.dev` URL).
+- **Realistic, varied text** — 30 distinct root comment bodies and ~35
+  distinct reply lines (agreement/reaction pool + a natural back-and-forth
+  conversational pool for the deep chain), no "(#N)" or "Level N" filler
+  anywhere.
+- **Reply structure**: 13 of the 30 roots get 1-3 shallow replies (a few
+  gaining one further nested reply, depth 2); 2 roots instead get a
+  **deep chain** (22 and 11 levels) via `buildDeepChain` — a linear
+  parent→child sequence with one small branch inserted partway down for
+  realism, built from the conversational text pool so it reads as an
+  actual debate, not synthetic depth-markers.
+- **Attachments**: `uploadImage`/`uploadText` added alongside
+  `createComment` — 3 images from the user-supplied `demo-images/` folder
+  (`atlas.jpg`/`ded.jpg`, 1280×720, well over the 320×240 resize threshold;
+  `zWs.gif`, 500×312) and 4 short, realistic `.txt` fixtures (a notes list,
+  a to-do, a recipe, a random-ideas list), handed out to specific spread-out
+  comments/replies (not every one) via `nextImageAttachmentId`/
+  `nextTextAttachmentId` cursors. `uploadImage` polls `attachment(id)`
+  briefly for `processedAt`, mirroring the frontend's own polling, so a
+  resize failure would surface here rather than silently reaching the demo.
+- **HTML-tagged replies**: a 12-line pool covering all four allowed tag
+  shapes (`<strong>`, `<i>`, `<code>`, `<a href="" title="">` with real,
+  generic, safe-scheme hrefs — MDN/GitHub/Wikipedia), sprinkled across both
+  the shallow-reply and deep-chain paths (~10 comments total ended up
+  HTML-tagged).
+- **Timestamp backdating**: `createComment` can't set `createdAt` (server
+  assigns `now()`), so realistic "spread over the last ~24 days" dates are
+  applied in a **second pass** after creation, via a direct
+  `@prisma/client` `UPDATE` per comment — roots spread oldest-to-newest
+  across the window (with jitter), replies dated some hours-to-days after
+  their parent, capped at `now()`. This is why the script now also needs
+  `DATABASE_URL` (already correct in the container's own environment, no
+  override needed).
+
+**Validated locally before touching production, twice**: a scaled-down
+smoke test (4 roots, a 4-level chain) first, to catch structural bugs fast
+without waiting through real rate-limit backoffs — it *looked* like a
+parent-tracking bug in `buildDeepChain` at first read (a reply's parent
+didn't match hand-traced expectations), traced properly via the actual
+`parentId` column and `identity()` offsets rather than assumed, and turned
+out to be correct: the branch and the main chain's next step are genuine
+siblings under the same parent, exactly as designed, just re-ordered by
+random jittered timestamps when read back sorted by `createdAt`. Then the
+full, unmodified script ran locally end-to-end (91 comments, both real-
+length deep chains, all attachments) before it ever touched production —
+confirmed via the actual frontend: 2-page pagination, sorting, three
+"Continue this thread" re-roots + three matching "Back" clicks landing
+exactly back at the true root, `<strong>`-tagged text, and an image
+attachment rendering resized. Zero console errors.
+
+**A real, previously-latent production gap found and fixed while running
+against production for real (not caught locally, since local dev has no
+nginx in front)**: the first production run crashed immediately on the
+first image upload (`atlas.jpg`, ~1.4 MB → ~1.9 MB base64) with an
+`Unexpected token '<'` JSON-parse error — the response was HTML, not JSON.
+Root-caused before touching anything: `/etc/nginx/sites-available/
+comments-api` had no explicit `client_max_body_size`, so nginx's own
+**1 MB default** was silently 413-ing the request before it ever reached
+the Node app (whose own `HTTP_BODY_LIMIT` is a deliberately-set 8 MB) —
+nginx returns an HTML error page for a 413, which is exactly what crashed
+the script's `JSON.parse`. Backed up the vhost file first, added
+`client_max_body_size 10m;` (comfortable headroom over the app's own 8 MB
+ceiling), `nginx -t` before reloading, confirmed `dedstream`'s own vhost
+file was untouched (md5sum unchanged), re-tested a real image upload
+directly (succeeded) before re-running the full script. This gap existed
+for every attachment ever uploaded through this domain, including the
+demo attachments from earlier sessions — luckily every prior manually-
+tested image happened to be small enough to sneak under nginx's 1 MB
+default, so it was never tripped until this run's deliberately larger
+(the brief's own "larger than 320×240 to demonstrate the resize" ask)
+image.
+
+**Deployment mechanics**: `git commit` + `push` happened *before* running
+on the VPS (not after, as the task's own step ordering suggested) —
+deliberately reordered so `git pull` on `/opt/dedcomments` would be a
+clean fast-forward with nothing to stash, avoiding a repeat of the stray-
+uncommitted-Dockerfile situation two entries up. `backend/scripts/` and
+the demo images aren't part of the running container's image (no volume
+mount, and `scripts/` isn't among the directories the Dockerfile copies
+into the runtime stage) — both were `docker cp`'d directly into the
+already-running `comments_backend` container rather than triggering a
+full image rebuild, since nothing about this task needed one. `demo-images/`
+was added to `.gitignore` (repo-root, ~55 MB of user-supplied source
+images, not meant to be committed).
+
+**Verified — the real live site** (`https://comments.dedstream.in.ua`,
+Playwright, after both the reset and the full production run): "0
+comments" confirmed immediately post-truncate, before seeding. Post-seed:
+2-page pagination (30 roots), Username-sort re-verified case-correct on
+the real data, the depth-22 chain's "Continue this thread" walked three
+times (confirmed via DOM query, not just a screenshot, since the relevant
+node scrolls out of the viewport) and "← Back to parent thread" three
+times back to the true root, an `<strong>`-tagged reply rendering bold,
+`ded.jpg`'s resized thumbnail opening the real `Lightbox`, and a `.txt`
+attachment (`todo.txt`) resolving to a working
+`comments-api.dedstream.in.ua/uploads/…` download link. Zero console
+errors through the entire pass.
+
+**Observation, flagged not acted on**: DedStream's containers
+(`dedstream-app`/`redis`/`postgres`) are currently *running*, not stopped
+as Step 20 left them — almost certainly this VPS's own known
+provider-side reboot cycle bringing them back via `restart: always`
+(documented in Step 20's own entry), not anything this session did.
+Unrelated to this task's scope; not touched.
+
+**Result — final counts** (matches CLAUDE.md's own progress-log
+convention of recording exact figures): **30 root comments, 61 replies
+(91 total)**, deepest thread depth **22**, **3 image attachments** (one a
+GIF), **4 text-file attachments**, **10 HTML-tagged comments**.
+
+**Delivery checklist status**: with this done, the live site is ready for
+demo-video recording — every scenario the video needs to show (deep
+threading + "Continue this thread", attachments with visible resize,
+HTML-tagged rendering, multi-page sorting) now has real, natural-looking
+data behind it on the actual deployed instance. Only the demo video itself
+remains from the brief's "Delivery format" section.
