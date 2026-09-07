@@ -3621,3 +3621,80 @@ latest main"), not a scope change.
 video remain from the brief's "Delivery format" section. Both the frontend
 (Vercel) and backend (this VPS) are now on the same commit (8ed85a6) for
 the first time since the visible-root-comment-text work began.
+
+---
+
+### Post-Step-20 fix — "Show more" toggle now detects real text overflow
+instead of guessing from a fixed character count (done)
+
+Follow-up bug report on the visible-root-comment-text feature: the toggle
+correctly worked at mobile width but stayed visible (and inert — nothing to
+reveal) at desktop width for the same comment.
+
+**Root cause, confirmed exactly as suspected**: `RootCommentRow` decided
+whether to clamp/show the toggle with `item.text.length >
+TEXT_TRUNCATE_THRESHOLD` (280) — a fixed character count with no relation
+to how many lines that text actually wraps to. The same ~210-character
+comment wraps to 2 lines in the ~820px-wide desktop content column but 4+
+lines in the ~330px mobile one — a fixed-length guess can't tell those
+apart, since it never looks at layout at all.
+
+**Fix**: replaced the guess with a real DOM measurement —
+`el.scrollHeight > el.clientHeight` on the clamped text element itself
+(`+1px` tolerance for sub-pixel rounding). The `.textClamped` CSS class
+(`-webkit-line-clamp: 3`) is now applied unconditionally whenever
+`!textExpanded` (no longer gated on the old length guess either) — clamping
+a short comment that already fits in 3 lines is a visual no-op, but it's
+what makes `clientHeight` (the clamped, visible height) meaningfully
+comparable against `scrollHeight` (the full, un-clamped content height) in
+the first place.
+- `useLayoutEffect` (not `useEffect`) so the measurement lands before paint
+  — no flash of a wrongly-shown/hidden toggle.
+- A `ResizeObserver` on the measured element, not just an on-mount
+  measurement — re-evaluates on every actual width change so a live
+  browser resize (not only a fresh page load at a given width) correctly
+  shows/hides the toggle. This is what the bug's own "borderline comment"
+  test case needs: fits at wide desktop, overflows once narrowed, with
+  nothing else about the page changing.
+- Measurement is skipped while `textExpanded` (there's no clamp box to
+  measure against once expanded) — the last known collapsed-state overflow
+  reading is left as-is instead of getting reset to a meaningless "no
+  overflow" the moment the clamp CSS turns off. It naturally re-measures
+  against the current width the next time that comment is collapsed again.
+- `TEXT_TRUNCATE_THRESHOLD` and `isLongText` removed entirely — no fallback
+  length heuristic kept alongside the real measurement; the task's own
+  framing was clear this should be replaced, not supplemented.
+
+**Verified manually** (full `docker compose up -d --build` stack — frontend
+rebuilt for the code change — desktop 1280px + 375px mobile, **without a
+page reload between the two**, i.e. testing the live-resize path the fix
+is actually for, not just two separate fresh loads):
+- A short comment (`demo1`/`demo2`, ~60 chars): no toggle at either width,
+  confirmed via `scrollHeight === clientHeight` at both.
+- A genuinely long comment (~1500 chars, 8 sentences): toggle shown at
+  both widths — confirmed overflowing (`scrollHeight` 260 vs `clientHeight`
+  60 at desktop).
+- **The borderline case the bug report specifically asked for**: a single
+  ~210-character comment, posted once. At 1280px: `scrollHeight ===
+  clientHeight` (40px both) → no toggle, confirmed by screenshot (fits on
+  2 lines, well under the 3-line clamp). Resized the *same already-loaded
+  page* down to 375px, no reload: `scrollHeight` (100) now exceeds
+  `clientHeight` (60) → toggle appears live, confirmed by screenshot —
+  this is the ResizeObserver path working, not a fresh-mount measurement.
+- Clicked "Show more" on the borderline comment (mobile) → full text
+  shown, button reads "Show less"; clicked again → re-collapses cleanly.
+  Zero console errors through every step above.
+
+**Verified — build/lint/typecheck**: `tsc --noEmit`, `next build`,
+`eslint` all clean (the one pre-existing, unrelated React Compiler
+info-warning on `CommentForm`'s `watch()`, same as every prior frontend
+session).
+
+**Deviation**: none — scoped to the exact reported bug and its own
+explicit fix suggestion (the task's diagnosis was correct on the first
+read: a naive length heuristic instead of real overflow detection).
+
+**Pending — unchanged**: this fix is local-only so far (not yet deployed
+to the VPS/Vercel); demo data curation, the demo video, and the production
+backend picking up this specific fix (next time the backend/frontend get
+redeployed) remain open.

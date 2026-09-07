@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useCallback, useState } from "react";
+import { Fragment, memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@apollo/client/react";
 import {
   RootCommentsDocument,
@@ -16,12 +16,6 @@ import { CommentThread } from "@/components/CommentThread";
 import { AttachmentPreview } from "@/components/AttachmentPreview";
 import { previewCommentHtml } from "@/shared/lib/commentPreview";
 import cls from "./RootCommentsTable.module.scss";
-
-// Past this many characters, a root comment's own text is clamped to a few
-// lines with a "Show more" toggle — a rough heuristic (no layout measurement),
-// good enough to keep one very long comment from blowing out the table's row
-// rhythm without needing a ResizeObserver for something this low-stakes.
-const TEXT_TRUNCATE_THRESHOLD = 280;
 
 const SORTABLE_COLUMNS: { field: RootCommentSortField; label: string }[] = [
   { field: "USERNAME", label: "Username" },
@@ -103,7 +97,46 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
   // state with `expanded` (which gates the *replies* fetch/render below).
   const [textExpanded, setTextExpanded] = useState(false);
   const hasReplies = item.repliesCount > 0;
-  const isLongText = item.text.length > TEXT_TRUNCATE_THRESHOLD;
+
+  // Whether the clamped text is ACTUALLY overflowing at the current rendered
+  // width — not a fixed character-count guess (a fixed threshold was tried
+  // first and was wrong: the same text wraps to fewer lines at a wide desktop
+  // width than at a narrow mobile one, so "is this comment long" isn't a
+  // constant across screen sizes — only "does it overflow its clamp box
+  // *right now*" is). `textRef`'s element always renders with the clamp CSS
+  // applied whenever `!textExpanded` (see the `textClamped` class below,
+  // no longer gated on a length guess either) — clamping a short comment that
+  // already fits in 3 lines is a visual no-op, but it's what lets `scrollHeight`
+  // (the full, unclamped content height) be compared against `clientHeight`
+  // (the clamped, visible height) to detect real overflow.
+  const textRef = useRef<HTMLDivElement>(null);
+  const [textOverflows, setTextOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    // Only meaningful while actually clamped — once expanded there's no clamp
+    // box to measure against, so the last known (collapsed-state) overflow
+    // reading is left as-is rather than reset. It gets re-measured against
+    // whatever the width is *then* the next time this comment collapses.
+    if (!el || textExpanded) return;
+
+    function measure() {
+      if (!el) return;
+      // +1px tolerance for sub-pixel rounding some browsers introduce between
+      // scrollHeight and clientHeight on text that just barely fits.
+      setTextOverflows(el.scrollHeight > el.clientHeight + 1);
+    }
+    measure();
+
+    if (typeof ResizeObserver === "undefined") return;
+    // Re-measures on every actual width change (not just on mount) — a
+    // borderline comment that fits at a wide viewport and overflows at a
+    // narrow one needs the toggle to appear/disappear live as the viewport
+    // resizes, not just once at initial render.
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [textExpanded, item.text]);
 
   return (
     <Fragment>
@@ -145,12 +178,13 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
       <tr className={cls.contentRow}>
         <td colSpan={5} className={cls.contentCell}>
           <div
+            ref={textRef}
             className={classNames(cls.commentText, {
-              [cls.textClamped]: isLongText && !textExpanded,
+              [cls.textClamped]: !textExpanded,
             })}
             dangerouslySetInnerHTML={{ __html: previewCommentHtml(item.text) }}
           />
-          {isLongText && (
+          {textOverflows && (
             <button
               type="button"
               className={cls.textToggle}
