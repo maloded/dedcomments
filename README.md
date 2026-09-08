@@ -13,8 +13,24 @@ there with its reasoning).
 
 ---
 
+## Two ways to review this project
+
+The brief asks for both a deployed instance and a from-a-clean-clone run, so both paths
+are kept valid and documented separately:
+
+| | |
+| --- | --- |
+| **Quick review — use the live deployment** | Frontend: **<https://comments.dedstream.in.ua>** · Backend GraphQL Sandbox: **<https://comments-api.dedstream.in.ua/graphql>**. This is the reviewed live instance, seeded with a realistic demo dataset (deep threads, attachments, formatted comments). Nothing to install. |
+| **Full self-check — run it locally from scratch** | Follow [Running from scratch](#running-from-scratch) below against a clean `git clone`. Only Docker is required; the stack builds and boots itself, migrations included. This section was itself verified by cloning the public repo fresh and following it verbatim. |
+
+The two are independent — the local instructions never touch the live deployment, and the
+live deployment isn't a prerequisite for anything local.
+
+---
+
 ## Table of contents
 
+- [Two ways to review this project](#two-ways-to-review-this-project)
 - [Feature overview](#feature-overview)
 - [Tech stack](#tech-stack)
 - [Architecture overview](#architecture-overview)
@@ -45,6 +61,9 @@ Organized by the brief's own tiers, so implementation maps directly onto require
 - **Sortable, paginated root-comment table** — top-level comments only, 25/page, sortable
   by Username / E-mail / Date (both directions), default sort **LIFO** (newest first).
   Replies within an expanded thread are always LIFO regardless of the table's sort order.
+  Each row shows the comment's **own text and attachment inline** (with a "Show more"
+  clamp for long bodies) — not hidden behind the "Expand" button, which only reveals the
+  nested reply thread.
 - **XSS / SQL-injection protection** — see [Architecture overview](#architecture-overview)
   below for specifics.
 - **File attachments** — one optional attachment per comment: an image (JPG/GIF/PNG,
@@ -63,15 +82,22 @@ Organized by the brief's own tiers, so implementation maps directly onto require
   invalidation on every new comment).
 - **Events** — the CAPTCHA/attachment/moderation flows are all event-driven internally;
   see also the WebSocket events below.
-- **JWT** — protects the Moderator role (login, hide comment, ban author).
+- **JWT** — protects the Moderator role. A logged-in moderator gets **Hide** (soft-delete
+  a comment and its whole subtree) and **Ban author** controls on **every** comment —
+  directly on each root-table row (not only on comments that have replies) and on every
+  reply inside a thread. The session is held in `sessionStorage`, so it **survives a page
+  reload** but clears when the tab closes; an expired/invalid token drops the session
+  cleanly back to logged-out rather than leaving the UI stuck.
 
 ### Middle additions (target scope)
 
 - **GraphQL** — the entire API (Apollo Server via NestJS), not REST.
 - **RabbitMQ** — see Queue above.
 - **Redis** — see Cache above.
-- **Cloud deployment** — see [Live deployment / demo video](#live-deployment--demo-video)
-  (pending — tracked as a TODO below).
+- **Cloud deployment** — live at
+  [comments.dedstream.in.ua](https://comments.dedstream.in.ua) (frontend on Vercel,
+  backend + Postgres/Redis/RabbitMQ on a VPS behind Nginx/HTTPS). See
+  [Live deployment / demo video](#live-deployment--demo-video).
 
 ### Beyond-brief polish
 
@@ -88,10 +114,11 @@ Built on top of the required scope, not instead of it:
   entries for the full investigation).
 - **Motion** — reply/thread-collapse/lightbox/sort animations throughout, all clamped to
   ~1ms under `prefers-reduced-motion: reduce`.
-- **WebSocket live updates** — new comments, hides, and bans push to every connected
-  client instantly, via **targeted Apollo cache updates** rather than blunt refetches, so
-  an unrelated part of the UI never re-renders or flickers when something elsewhere
-  changes (see [Architecture overview](#architecture-overview)).
+- **WebSocket live updates** — `commentCreated`, `commentHidden` and `authorBanned`
+  events push to every connected client instantly (so both new comments *and* moderation
+  actions propagate live across tabs/visitors), via **targeted Apollo cache updates**
+  rather than blunt refetches, so an unrelated part of the UI never re-renders or flickers
+  when something elsewhere changes (see [Architecture overview](#architecture-overview)).
 - **"Continue this thread →"** — Reddit-style re-rooting for threads that exceed the
   visual indentation cap, instead of either truncating them or letting indentation run
   off-screen.
@@ -222,31 +249,41 @@ measurement).
 ### Prerequisites
 
 - Docker and Docker Compose (v2 CLI, i.e. `docker compose`, not the standalone
-  `docker-compose`)
-- Nothing else needs to be installed on the host — Node, Postgres, Redis, and RabbitMQ
-  all run inside containers.
+  `docker-compose`).
+- **That's all you need to run the app.** Postgres, Redis, RabbitMQ, the NestJS backend
+  (Node) and the Next.js frontend (Node) all build and run inside containers — the host
+  needs no Node, no database, nothing else. Commands that operate on the running stack
+  (seeding the moderator account, etc.) are given as `docker compose exec …` so they work
+  with Docker alone.
+- Node 20+ on the host is only needed if you additionally want to run the **test suites**
+  or the **type-check / lint / build** commands outside Docker — see
+  [Running tests](#running-tests). It is not needed for anything in this section.
 
 ### 1. Clone and configure environment
 
 ```bash
-git clone <this-repository-url>
+git clone https://github.com/maloded/dedcomments.git
 cd dedcomments
 
+# The backend container reads backend/.env (docker compose fails without this file).
 cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
 ```
 
-`backend/.env` — the defaults in `.env.example` work as-is for a local run. The only
-values worth reviewing before a real deployment:
+`backend/.env` — the defaults in `.env.example` work **as-is** for a local Docker run
+(the app boots cleanly with them, moderator seeding included). The only values worth
+reviewing before a *real* deployment:
 
 - `JWT_SECRET` — replace the placeholder with a long random string.
-- `MODERATOR_USERNAME` / `MODERATOR_PASSWORD` — the account created by
-  `npm run seed:moderator` (see [Moderator access](#moderator-access)); rotate the
-  password before any real deployment.
+- `MODERATOR_USERNAME` / `MODERATOR_PASSWORD` — the account created by the moderator seed
+  (see [Moderator access](#moderator-access)); use a non-default password for any real
+  deployment.
 - `ALLOWED_ORIGIN` — must match wherever the frontend is actually served from (CORS).
 
-`frontend/.env` — one variable, `NEXT_PUBLIC_GRAPHQL_URL`, already defaults to
-`http://localhost:4000/graphql`, correct for the default `docker compose` setup below.
+> **`frontend/.env` is not needed for the Docker workflow.** `docker compose` passes the
+> backend URL to the frontend build as an arg (`NEXT_PUBLIC_GRAPHQL_URL`, defaulting to
+> `http://localhost:4000/graphql` — correct for this setup); the `frontend` service has no
+> `env_file`. Only copy `frontend/.env.example` → `frontend/.env` if you plan to run the
+> frontend directly on the host with `npm run dev` instead of in a container.
 
 ### 2. Build and start the full stack
 
@@ -256,27 +293,44 @@ docker compose up -d --build
 
 This starts five containers: `postgres`, `redis`, `rabbitmq`, `backend`, `frontend`.
 The backend container runs `prisma migrate deploy` automatically on boot before
-starting the API, so the database schema is created for you — no manual migration step.
+starting the API, so the database schema is created and migrated for you — no manual
+migration step.
 
 **First boot takes a few minutes** — building the backend and frontend images (installing
 dependencies, compiling), then waiting for Postgres/Redis/RabbitMQ health checks before
 the backend starts, then the backend's own migration + boot. Subsequent
 `docker compose up -d` runs (without `--build`, no source changes) are fast — seconds.
 
+Check everything came up:
+
+```bash
+docker compose ps
+```
+
+`postgres`, `redis` and `rabbitmq` should report `(healthy)`; `backend` and `frontend`
+show `Up` (they have no Docker healthcheck) — confirm those two from their logs
+(`docker compose logs backend | tail` should end with `🚀 Backend ready …`) or just from
+the verification below.
+
 ### 3. Verify it's working
 
 - **Frontend**: [http://localhost:3000](http://localhost:3000) — the comments page,
-  starting with an empty table.
+  starting with an empty table ("No comments yet — be the first to leave one.").
 - **Backend GraphQL Sandbox**: [http://localhost:4000/graphql](http://localhost:4000/graphql)
   — Apollo Sandbox, browsable in a browser (a non-browser request there returns 400 by
   design — it's not a JSON API root).
 - **RabbitMQ management UI**: [http://localhost:15672](http://localhost:15672)
   (`guest`/`guest` by default) — useful to confirm the `attachment.resize` queue exists
   and is draining after an image upload.
+- **WebSocket**: the frontend header shows a green **"Live"** indicator once the Socket.IO
+  connection is up.
 
 Post a comment through the UI (solve the CAPTCHA, fill the form) — it should appear in
-the table immediately, and reloading a second browser tab pointed at the same URL should
-show it too (confirming the WebSocket live-update path).
+the table immediately. Open a second browser tab at the same URL and post from one tab:
+the other tab updates **without a reload**, confirming the WebSocket live-update path.
+To exercise moderation, seed the moderator account
+([Moderator access](#moderator-access)) and log in via the "Moderator" link in the
+header.
 
 ### Stopping / resetting
 
@@ -287,21 +341,23 @@ docker compose down -v       # stop containers AND wipe postgres/redis/rabbitmq 
 
 ---
 
-## Running tests
+Running the test suites **does** need Node 20+ on the host (they run outside Docker,
+directly against `backend/`). This is separate from running the app, which needs only
+Docker.
 
-Backend tests run against a real Postgres/Redis/RabbitMQ — either the ones started by
-`docker compose up -d postgres redis rabbitmq` (dev, unmigrated schema — run
-`npm run prisma:migrate` inside `backend/` once) or against the full `docker compose`
-stack with the dockerized `backend` container **stopped** first (e2e tests share the
-same RabbitMQ queue as the running app, so both can't be consuming it at once).
+Backend tests run against a real Postgres/Redis/RabbitMQ. Start just the infra with
+`docker compose up -d postgres redis rabbitmq` (then run `npm run prisma:migrate` inside
+`backend/` once to create the schema), **or** run the full `docker compose` stack with
+the dockerized `backend` container **stopped** first — `docker compose stop backend` —
+since the e2e tests and the running app can't both consume the same RabbitMQ queue.
 
 ```bash
 cd backend
 npm install
 
-npm run test        # unit tests — 86/86 passing
+npm run test        # unit tests — 88/88 passing
 npm run test:e2e    # e2e tests — 56/56 passing (requires postgres/redis/rabbitmq up,
-                     # and the containerized `backend` service stopped)
+                    # and the containerized `backend` service stopped)
 ```
 
 Frontend has no automated test suite (feature/QA verification for this project was done
@@ -321,21 +377,36 @@ npm run lint
 ## Moderator access
 
 A Moderator role (JWT-protected) can hide individual comments (and their whole subtree)
-and ban an author's `(username, email)` identity from posting further comments. There's
-no public sign-up for this role — it's a single seeded account, intended for
-demonstrating the moderation feature, not multi-moderator administration.
+and ban an author's `(username, email)` identity from posting further comments. Once
+logged in, **Hide** and **Ban author** controls appear on every root-table row and every
+reply. There's no public sign-up — it's a single seeded account, for demonstrating
+moderation, not multi-moderator administration.
 
-Seed the account (needs the backend's database migrated and reachable):
+**Seed the account** against the running stack (Docker only — no host Node needed):
 
 ```bash
-cd backend
-npm run seed:moderator
+docker compose exec backend npm run seed:moderator
 ```
 
-This creates the account from `backend/.env`'s `MODERATOR_USERNAME` /
-`MODERATOR_PASSWORD` values (defaults are in `.env.example`, meant for local
-development only — **rotate the password before any real deployment**; this is tracked
-as an open item, see below). Log in via the "Moderator" link in the app's header.
+This runs inside the `backend` container (which already has its dependencies and a
+generated Prisma client) and creates/updates the account from `backend/.env`'s
+`MODERATOR_USERNAME` / `MODERATOR_PASSWORD`. With the unchanged `.env.example` defaults
+that's:
+
+| Username | Password |
+| --- | --- |
+| `moderator` | `moderator-dev-password` |
+
+These are **local-development credentials only**. The live deployment uses a different,
+non-published password (set in its own environment, never committed).
+
+Then log in via the **"Moderator"** link in the app's header. The session is stored in
+`sessionStorage`, so it survives a page reload but not closing the tab.
+
+> If you have Node 20+ on the host and have run `npm install` in `backend/`, the seed
+> also works there directly with `npm run seed:moderator` (it reads `backend/.env` and
+> connects to Postgres on `localhost:5432`). The `docker compose exec` form above is the
+> one that works with only Docker installed.
 
 ---
 
@@ -409,9 +480,23 @@ Noted upfront so a reviewer doesn't mistake an intentional boundary for a bug:
 
 ## Live deployment / demo video
 
-- **Live URL**: _TODO — not yet deployed._
-- **Demo video**: _TODO — recorded once a deployment and curated demo dataset are in
-  place._
+The **reviewed live instance** (see also [Two ways to review this project](#two-ways-to-review-this-project)):
 
-Both are the last remaining items before submission — see `CLAUDE.md`'s Progress log for
-current status.
+| | URL |
+| --- | --- |
+| **Frontend** (the app) | <https://comments.dedstream.in.ua> |
+| **Backend** GraphQL Sandbox | <https://comments-api.dedstream.in.ua/graphql> |
+
+- Frontend deployed on Vercel; backend on a VPS (Docker + Nginx + Let's Encrypt), with
+  Postgres / Redis / RabbitMQ alongside it. The two talk over HTTPS; the WebSocket runs
+  over `wss://` through the same backend domain.
+- The live database is seeded with a **curated demo dataset** — realistic authors, deep
+  nested threads (including one past the "Continue this thread →" cap), image and text
+  attachments, and comments using each allowed formatting tag.
+- Moderation is enabled on the live instance; the moderator credentials are **not**
+  published here (the `.env.example` dev password is not what's deployed).
+- This is a separate concern from [running locally from scratch](#running-from-scratch) —
+  the local instructions never touch this deployment.
+
+**Demo video**: _TODO — a short screen recording of the deployed app is still to be
+recorded; it's the one remaining item from the brief's "Delivery format" section._

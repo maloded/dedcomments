@@ -4200,3 +4200,121 @@ plain-React-state → sessionStorage swap is otherwise exactly as scoped.
 
 **Pending**: unchanged — only the demo video remains from the brief's
 "Delivery format" section.
+
+---
+
+### Step 23 — genuine clean-clone verification + README brought fully up to
+date (done)
+
+The brief's own self-check ("before saying everything is ready, try
+running your project from scratch per your README from your Git
+repository") had never actually been done — all prior work happened in the
+one already-configured working copy. This step did it for real: **cloned
+the public repo fresh** (`git clone https://github.com/maloded/dedcomments.git`
+via HTTPS, no SSH key — what a reviewer uses) into a throwaway temp dir,
+with genuinely fresh Docker volumes (the temp clone shares the compose
+project name `dedcomments` with the working copy, so `docker compose down
+-v` first to guarantee an empty DB), and followed `README.md` verbatim.
+
+**What the clean-clone run found**
+
+1. **Blocking for a README-following reviewer: the moderator-seed command
+   couldn't work as written.** README's *Moderator access* said
+   `cd backend && npm run seed:moderator`, while *Prerequisites* said
+   "Nothing else needs to be installed on the host — Node, Postgres,
+   Redis, and RabbitMQ all run inside containers." A reviewer with only
+   Docker has no `backend/node_modules` (and maybe no `node`/`npm` at
+   all): the command dies with `Error: Cannot find module 'dotenv/config'`.
+   **Fix:** the documented command is now
+   `docker compose exec backend npm run seed:moderator` (runs inside the
+   container, which already has deps + a generated Prisma client) —
+   verified working on the clean clone. The host `npm run seed:moderator`
+   path is kept as a secondary note for anyone who does have Node.
+2. **Misleading: `cp frontend/.env.example frontend/.env` is a no-op for
+   the Docker workflow.** The `frontend` compose service has no `env_file`;
+   `NEXT_PUBLIC_GRAPHQL_URL` is a build-arg with a correct default. A
+   reviewer creating that file per instructions and expecting it to matter
+   is misled. **Fix:** README no longer tells you to copy it in the main
+   flow — there's a note that it's only for running the frontend on the
+   host with `npm run dev`. (`backend/.env` genuinely *is* required —
+   `docker compose` fails without it — and that copy step stays.)
+3. **Inaccurate: "brings up all 5 services healthy."** Only
+   `postgres`/`redis`/`rabbitmq` define a Docker healthcheck;
+   `backend`/`frontend` just show `Up`. **Fix:** README's verify step now
+   says exactly that and points at `docker compose logs backend | tail`
+   (`🚀 Backend ready …`) plus the functional checks for those two.
+4. **Inconsistency: the *Running tests* section (and the frontend
+   type-check/build commands) need host Node 20+**, contradicting the
+   "nothing else on the host" prerequisite. **Fix:** Prerequisites now
+   scopes that claim to *running the app*; a separate line says the test
+   suites / lint / build additionally need Node 20+, and the tests section
+   repeats it.
+5. **Minor:** `JWT_SECRET=replace-with-a-long-random-string` (the
+   placeholder) — confirmed the backend boots fine with it as-is for a
+   local run (no min-length env validation); README already flags it for
+   real deploys, left as is.
+
+**What the clean-clone run confirmed works (end to end, genuinely fresh
+instance)**
+
+- HTTPS `git clone` with no auth; repo contains no `docker-compose.prod.yml`
+  or `.env` (deploy-local, correctly gitignored) — a reviewer gets only the
+  default `docker-compose.yml`.
+- `docker compose up -d --build` → all 5 containers up, 3 infra `(healthy)`;
+  first build ~a few minutes, no manual steps.
+- Backend auto-runs `prisma migrate deploy` on boot → all **5 migrations
+  applied** against the empty DB, schema created, no manual migration step
+  (README's claim is accurate).
+- GraphQL Sandbox `:4000/graphql` (HTTP 200 for a browser `Accept`),
+  frontend `:3000` (HTTP 200, empty-table state), RabbitMQ mgmt `:15672`
+  (`guest`/`guest`).
+- **Posted a comment through the real form UI, solving the real CAPTCHA**
+  (answer read from the fresh Redis) → "Comment posted.", row appears,
+  form resets. Also posted one out-of-band via GraphQL and watched it
+  appear in the open browser tab **with no reload** — WebSocket `Live`
+  indicator green, `commentCreated` targeted-cache insert path working.
+- `docker compose exec backend npm run seed:moderator` → account created;
+  logged in via the header "Moderator" link with
+  `moderator` / `moderator-dev-password`; Hide / Ban author controls
+  appeared on every root row; session written to `sessionStorage`.
+- Zero console errors throughout.
+
+**README changes (`README.md`)**
+
+- New top-of-file **"Two ways to review this project"** section: a clear
+  split between *quick review → use the live deployment* and *full
+  self-check → run locally from scratch*, since the brief cares about both.
+- **Live deployment links added**, marked as the reviewed live instance:
+  frontend <https://comments.dedstream.in.ua>, backend GraphQL Sandbox
+  <https://comments-api.dedstream.in.ua/graphql>. The old "Live URL: TODO"
+  is gone; the **demo video stays a clearly-marked TODO**.
+- All five clean-clone findings above fixed (moderator command,
+  `frontend/.env` note, healthcheck wording, host-Node scoping, verify
+  step).
+- Feature list brought up to date with everything built since the README
+  was first written: **root-row comment text/attachments shown inline**
+  (not behind Expand), **Hide/Ban on every comment** (root rows included,
+  not just ones with replies), **`sessionStorage` session persistence**
+  (survives reload, clears on tab close, graceful invalid-token
+  fallback), WebSocket events spelled out as `commentCreated` /
+  `commentHidden` / `authorBanned` (comment creation **and** moderation
+  propagate live). "Continue this thread →", dark theme, avatars,
+  connector graphics and motion were already documented — left as is.
+- Test counts refreshed (unit 86 → **88**; e2e **56** unchanged).
+- `git clone` example uses the real public HTTPS URL, not a placeholder.
+
+**Verified after editing:** re-applied the updated README to the still-
+running clean clone and ran its exact commands verbatim (`docker compose
+exec backend npm run seed:moderator`, `docker compose ps`) — both behave
+as the new text describes. Clean-clone stack + temp dir then torn down
+(`docker compose down -v`), working-copy dev stack brought back up and
+re-seeded (moderator; the bulk `seed:comments` demo set is
+image-external + needs local-only `/demo-images/`, so the dev DB is left
+minimal — demo data lives on production, as before).
+
+**Deviation:** none — README edits are documentation only; no app code
+changed, so backend/frontend test suites untouched.
+
+**Pending**: only the **demo video** remains from the brief's "Delivery
+format" section. Deployment, README, and the MySQL Workbench schema export
+are all done and now verified from a clean clone.
