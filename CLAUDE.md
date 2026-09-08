@@ -4021,3 +4021,98 @@ tagged text (both short sentences and embedded mid-paragraph), and now
 genuine multi-paragraph long-form comments at both the root and reply
 level. Pending final manual sign-off before recording; only the demo video
 itself remains from the brief's "Delivery format" section.
+
+---
+
+### Post-Step-22 fix — Hide/Ban moderator controls unreachable for
+zero-reply root comments (done)
+
+**Bug, introduced as a side effect of the "visible root comment text"
+change (commit 8ed85a6 / the two "Post-Step-20" entries about that
+feature):** that change made a root comment's own text/attachment visible
+directly in its `RootCommentsTable` row, and narrowed the "Expand" button
+to only appear when `repliesCount > 0` (a 0-reply root has nothing to
+expand). But Hide/Ban lived *only* inside `CommentThreadNode` — which
+never mounts for a root with no replies, since there's no Expand button
+and therefore no `<CommentThread>`. Net result: a moderator had **no way
+to hide a spam comment or ban its author for any root comment with zero
+replies** — a large fraction of all comments. Moderation was quietly
+reachable only for the minority of roots that happened to have a reply.
+
+**Fix — moderator controls on every root row, via a shared hook:**
+- New `src/lib/useModerationActions.ts` — extracts the `hideComment` /
+  `banAuthor` mutation calls, JWT-header wiring, `isUnauthorized`
+  session-drop handling, and the `banned` latch that were inline in
+  `CommentThreadNode`. Both call sites now use it; each still renders its
+  own buttons where its own layout wants them (a single shared *component*
+  wouldn't fit — the thread node puts "Ban author" on the meta line and
+  "Hide" in the actions row, the table row wants them together under the
+  text), so a hook is the right shared unit, not a component.
+- `RootCommentsTable`'s `RootCommentRow` now calls the hook and renders a
+  `Hide` / `Ban author` row (ghost-danger buttons, same treatment as the
+  thread view) under the comment's text/attachment, gated on
+  `moderation.isLoggedIn`. Shown on **every** root row regardless of
+  reply count or Expand button. `.moderatorActions` / `.bannedLabel` /
+  `.moderationError` styles added.
+- `CommentThreadNode` refactored to consume the hook (no logic change for
+  replies). **Consolidation:** the true (non-re-rooted) root's depth-0
+  node in an expanded thread — the one flagged by `hideOwnContent`, whose
+  text/attachment are already suppressed there because the table row shows
+  them — now also suppresses its Hide/Ban (`showModeration = isLoggedIn &&
+  !hideOwnContent`). So each comment's moderator controls appear in exactly
+  one place: a root's on its table row, a reply's (and a "Continue this
+  thread" re-rooted view root's) in the thread. No redundant second copy.
+- **Hide no longer refetches `RootComments`** (it was
+  `["RootComments", "CommentThread"]` for a root before). Both root and
+  reply hide now refetch `["CommentThread"]` only and rely on the
+  `commentHidden` WebSocket broadcast's targeted cache write
+  (`RealtimeConnection.handleRootCommentHidden` removes the row;
+  `handleReplyCommentEvent`'s `cache.modify` decrements the parent's
+  `repliesCount`) — so hiding a 0-reply root from the new row location
+  removes it via the same efficient path as before, without the
+  full-table skeleton flicker a `RootComments` refetch causes (the
+  flicker fixed in Steps 17-18).
+
+**Verified manually** (full `docker compose up -d --build` stack —
+frontend image rebuilt — desktop 1280px + 375px mobile, logged in as the
+seeded dev moderator):
+- Hide + Ban author now render on root rows with **zero replies**
+  (RosaOrtiz, NinaHayes, CalebStone, OscarWinters — previously had no
+  controls at all), desktop and mobile.
+- They also render on root rows **with** replies (AishaBello, MarcusWebb),
+  directly on the row — and no longer *also* inside the expanded thread
+  for that root's own depth-0 node (verified via DOM query: the root node
+  in an expanded `CommentThread` has only `[–] collapse` / `Reply`, no
+  Hide/Ban). Replies inside the thread (WillaFrost under MarcusWebb,
+  RubenSalas under AishaBello) keep Hide/Ban exactly as before — **not
+  regressed**.
+- Hiding a 0-reply root (NinaHayes) from its row: row disappears,
+  `totalCount` 37→36, and a `MutationObserver` on `<tbody>` recorded only
+  **4 DOM mutations** (2 `<tr>` removals for that comment's meta+content
+  rows, 1 `characterData` for the count text, 1 attribute) — **no
+  `Skeleton` elements, no full-table teardown** → the targeted
+  `handleRootCommentHidden` cache update, not a refetch.
+- Hiding a reply (WillaFrost) from inside a thread: reply vanishes,
+  parent MarcusWebb's `repliesCount` 1→0 via `cache.modify` (observed as
+  a `characterData` change with `oldValue: "1"`), no skeleton swap.
+- Ban author from a root row (RosaOrtiz): comment stays (existing
+  comments aren't retroactively hidden, per brief), button swaps to a
+  "Banned" label, `authors.isBanned = true` confirmed in Postgres.
+- Log out → all Hide/Ban/`moderatorActions` blocks disappear from both
+  the table rows and the thread; "Moderator" login link returns.
+- Zero console errors throughout. Local test data (2 hidden comments, 1
+  ban) restored afterward via `psql` + `rootComments:*` Redis flush.
+- `tsc --noEmit` / `next build` / `eslint` all clean.
+
+**Pre-existing, out of scope (flagged, not fixed):** at 375px the header's
+"Moderator: moderator  Log out" block overflows the viewport by ~20px when
+logged in (a faint horizontal scrollbar). It's in `HomeView`'s
+`headerRight` / `ModeratorPanel`, untouched by this change — the new
+`.moderatorActions` in the table wrap correctly and cause no overflow.
+
+**Deviation:** none — scoped to the reported bug plus the
+one-place-per-comment consolidation the task explicitly left to this
+session's judgment.
+
+**Pending**: unchanged — only the demo video remains from the brief's
+"Delivery format" section.

@@ -1,24 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@apollo/client/react";
-import { CombinedGraphQLErrors } from "@apollo/client/errors";
 import { Button } from "@/shared/ui/Button";
 import { Avatar } from "@/shared/ui/Avatar";
 import { CommentForm } from "@/components/CommentForm";
 import { AttachmentPreview } from "@/components/AttachmentPreview";
 import { previewCommentHtml } from "@/shared/lib/commentPreview";
 import { classNames } from "@/shared/lib/classNames";
-import { useModeratorAuth } from "@/lib/moderatorAuth";
-import { BanAuthorDocument, HideCommentDocument } from "@/graphql/generated";
+import { useModerationActions } from "@/lib/useModerationActions";
 import cls from "./CommentThread.module.scss";
-
-/** True if any error in a mutation's `CombinedGraphQLErrors` was UNAUTHORIZED
- * — an expired/invalid JWT, meaning the moderator session should be dropped
- * rather than left looking logged-in while every action silently fails. */
-function isUnauthorized(err: unknown): boolean {
-  return CombinedGraphQLErrors.is(err) && err.errors.some((e) => e.extensions?.code === "UNAUTHORIZED");
-}
 
 /**
  * The render-friendly shape `CommentThreadNode` recurses over. Structurally
@@ -76,13 +66,16 @@ interface CommentThreadNodeProps {
    * (shown only at `MAX_VISUAL_DEPTH` with replies) is clicked — pushes onto
    * `CommentThread`'s `rerootStack` so that node becomes the new depth-0 view. */
   onContinueThread: (id: string) => void;
-  /** True only for the true (non-re-rooted) root, whose text/attachment are
-   * already shown directly in its `RootCommentsTable` row — see
-   * `CommentThread`'s doc comment. Suppresses just the `.text`/`.attachment`
-   * blocks so they aren't rendered twice; meta (avatar/username/date, needed
-   * for the connector's anchor point) and actions (Reply/Hide/Ban/collapse)
-   * still render — expanding the thread is still the only place to act on
-   * the root comment itself. */
+  /** True only for the true (non-re-rooted) root, whose text/attachment —
+   * and, since the "Hide/Ban on every root row" fix, whose moderator
+   * controls too — are already shown directly in its `RootCommentsTable`
+   * row (see `CommentThread`'s doc comment). Suppresses the `.text` /
+   * `.attachment` blocks and the Hide/Ban buttons so none of them render
+   * twice; meta (avatar/username/date, needed for the connector's anchor
+   * point) and the Reply/collapse actions still render. A re-rooted
+   * "Continue this thread" view leaves this `false` — that view root is a
+   * reply, shown nowhere else, so it renders its own content and controls
+   * normally. */
   hideOwnContent?: boolean;
 }
 
@@ -111,12 +104,21 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [replying, setReplying] = useState(false);
   const [replyClosing, setReplyClosing] = useState(false);
-  const [moderationError, setModerationError] = useState<string | null>(null);
-  const [banned, setBanned] = useState(false);
 
-  const { session, isLoggedIn, logout } = useModeratorAuth();
-  const [hideCommentMutation, { loading: hiding }] = useMutation(HideCommentDocument);
-  const [banAuthorMutation, { loading: banning }] = useMutation(BanAuthorDocument);
+  const {
+    isLoggedIn,
+    hide,
+    ban,
+    hiding,
+    banning,
+    banned,
+    error: moderationError,
+  } = useModerationActions({ commentId: node.id, authorId: node.author.id });
+  // The true root's Hide/Ban live on its `RootCommentsTable` row now (see
+  // `hideOwnContent`) — showing them here too would just be a redundant
+  // second copy for that one node. Replies, and re-rooted view roots, still
+  // moderate from here.
+  const showModeration = isLoggedIn && !hideOwnContent;
 
   // `node.replies` can genuinely be `undefined` here, not just empty: the
   // fetched query nests `replies` 30 levels deep (see commentThread.graphql),
@@ -177,56 +179,6 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
     }
   }
 
-  async function handleHide() {
-    if (!session) return;
-    setModerationError(null);
-    try {
-      await hideCommentMutation({
-        variables: { commentId: node.id },
-        context: { headers: { Authorization: `Bearer ${session.token}` } },
-        // Hiding a root: refetch RootComments too — safe to coexist with
-        // RealtimeConnection's own socket-driven removal (received from our
-        // own broadcast too), since "remove this id if present" is
-        // idempotent regardless of which one lands first.
-        //
-        // Hiding a reply: deliberately *not* included — only "CommentThread"
-        // is. That decrements the parent's `repliesCount` by a *relative* -1
-        // via RealtimeConnection's `cache.modify`, and unlike the idempotent
-        // root-removal above, a relative adjustment isn't safe to double-
-        // apply if this refetch's absolute count landed first. Same
-        // reasoning as CommentForm's reply-create path — see
-        // RealtimeConnection's `handleReplyCommentEvent` doc comment.
-        refetchQueries: node.parentId ? ["CommentThread"] : ["RootComments", "CommentThread"],
-      });
-    } catch (err) {
-      if (isUnauthorized(err)) {
-        logout();
-        setModerationError("Your session expired — please log in again.");
-        return;
-      }
-      setModerationError("Could not hide this comment. Please try again.");
-    }
-  }
-
-  async function handleBan() {
-    if (!session) return;
-    setModerationError(null);
-    try {
-      await banAuthorMutation({
-        variables: { authorId: node.author.id },
-        context: { headers: { Authorization: `Bearer ${session.token}` } },
-      });
-      setBanned(true);
-    } catch (err) {
-      if (isUnauthorized(err)) {
-        logout();
-        setModerationError("Your session expired — please log in again.");
-        return;
-      }
-      setModerationError("Could not ban this author. Please try again.");
-    }
-  }
-
   return (
     <div className={classNames(cls.CommentThreadNode, { [cls.root]: depth === 0 })}>
       <div className={cls.body}>
@@ -242,12 +194,12 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           />
           <span className={cls.username}>{node.author.username}</span>
           <span className={cls.date}>{formatDate(node.createdAt)}</span>
-          {isLoggedIn && (
+          {showModeration && (
             <span className={cls.banStatus}>
               {banned ? (
                 "Banned"
               ) : (
-                <Button size="sm" variant="clear" color="danger" onClick={() => void handleBan()} disabled={banning}>
+                <Button size="sm" variant="clear" color="danger" onClick={() => void ban()} disabled={banning}>
                   {banning ? "Banning…" : "Ban author"}
                 </Button>
               )}
@@ -295,8 +247,8 @@ export function CommentThreadNode(props: CommentThreadNodeProps) {
           <Button size="sm" variant="clear" onClick={toggleReply}>
             {replying && !replyClosing ? "Cancel" : "Reply"}
           </Button>
-          {isLoggedIn && (
-            <Button size="sm" variant="clear" color="danger" onClick={() => void handleHide()} disabled={hiding}>
+          {showModeration && (
+            <Button size="sm" variant="clear" color="danger" onClick={() => void hide()} disabled={hiding}>
               {hiding ? "Hiding…" : "Hide"}
             </Button>
           )}

@@ -15,6 +15,7 @@ import { Avatar } from "@/shared/ui/Avatar";
 import { CommentThread } from "@/components/CommentThread";
 import { AttachmentPreview } from "@/components/AttachmentPreview";
 import { previewCommentHtml } from "@/shared/lib/commentPreview";
+import { useModerationActions } from "@/lib/useModerationActions";
 import cls from "./RootCommentsTable.module.scss";
 
 const SORTABLE_COLUMNS: { field: RootCommentSortField; label: string }[] = [
@@ -112,6 +113,19 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
   const textRef = useRef<HTMLDivElement>(null);
   const [textOverflows, setTextOverflows] = useState(false);
 
+  // Moderator hide/ban for this root comment, available on EVERY row —
+  // previously these only existed inside the expanded `CommentThreadNode`
+  // tree, which a 0-reply root has no "Expand" button (and so no thread) for,
+  // leaving those comments impossible to moderate. Same `hideComment` /
+  // `banAuthor` mutations as the thread view (shared `useModerationActions`
+  // hook); for the root's own depth-0 node inside an expanded thread the
+  // controls are suppressed there now (`hideOwnContent`) so they show in
+  // exactly one place per comment.
+  const moderation = useModerationActions({
+    commentId: item.id,
+    authorId: item.author.id,
+  });
+
   useLayoutEffect(() => {
     const el = textRef.current;
     // Only meaningful while actually clamped — once expanded there's no clamp
@@ -200,6 +214,36 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
                 url={item.attachment.url}
                 originalName={item.attachment.originalName}
               />
+            </div>
+          )}
+
+          {moderation.isLoggedIn && (
+            <div className={cls.moderatorActions}>
+              <Button
+                size="sm"
+                variant="clear"
+                color="danger"
+                onClick={() => void moderation.hide()}
+                disabled={moderation.hiding}
+              >
+                {moderation.hiding ? "Hiding…" : "Hide"}
+              </Button>
+              {moderation.banned ? (
+                <span className={cls.bannedLabel}>Banned</span>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="clear"
+                  color="danger"
+                  onClick={() => void moderation.ban()}
+                  disabled={moderation.banning}
+                >
+                  {moderation.banning ? "Banning…" : "Ban author"}
+                </Button>
+              )}
+              {moderation.error && (
+                <span className={cls.moderationError}>{moderation.error}</span>
+              )}
             </div>
           )}
         </td>

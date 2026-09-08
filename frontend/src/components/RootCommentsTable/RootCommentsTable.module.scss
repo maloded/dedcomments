@@ -169,6 +169,27 @@
   margin-top: var(--space-2);
 }
 
+// Moderator-only hide/ban row, under the comment's text/attachment. Mirrors
+// the ghost-danger button treatment used in the thread view's `.actions`.
+.moderatorActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.bannedLabel {
+  font: var(--font-xs);
+  color: var(--color-danger);
+  padding: 0 var(--space-2);
+}
+
+.moderationError {
+  font: var(--font-xs);
+  color: var(--color-danger);
+}
+
 .threadRow > .threadCell {
   padding: 0;
   white-space: normal;
