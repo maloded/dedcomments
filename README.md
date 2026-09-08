@@ -341,6 +341,8 @@ docker compose down -v       # stop containers AND wipe postgres/redis/rabbitmq 
 
 ---
 
+## Running tests
+
 Running the test suites **does** need Node 20+ on the host (they run outside Docker,
 directly against `backend/`). This is separate from running the app, which needs only
 Docker.
