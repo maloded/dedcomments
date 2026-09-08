@@ -4116,3 +4116,87 @@ session's judgment.
 
 **Pending**: unchanged — only the demo video remains from the brief's
 "Delivery format" section.
+
+---
+
+### Post-Step-22 fix — moderator session persists across page reloads via
+sessionStorage (done)
+
+**UX gap:** the moderator JWT was held in plain React state only (the
+original `moderatorAuth.tsx` documented this as a deliberate "simpler of
+the two allowed options" choice). A page reload wiped it — the moderator
+had to re-enter credentials on every refresh, awkward for real use and for
+demoing the moderation flow.
+
+**Fix — `src/lib/moderatorAuth.tsx`, mirror the session into
+`sessionStorage`** (not `localStorage`: survives a reload during active
+work, but is tab-scoped and cleared when the tab closes — the right middle
+ground; a moderator session has no reason to persist indefinitely or bleed
+into a fresh browser session):
+- `STORAGE_KEY = "dedcomments.moderatorSession"`, value `{ token, username }`.
+- `login()` now writes the session to `sessionStorage` **in addition to**
+  `setSession` (React state stays the source of truth for in-page
+  reactivity — every consumer, `useModerationActions` included, still
+  just reads context).
+- `logout()` clears `sessionStorage` **and** the in-memory state together.
+- Session restored on mount via `useState`'s **lazy initializer**
+  (`readStoredSession`), not a `useEffect` — reading storage during the
+  initializer is safe here because the whole interactive tree is
+  client-only (`page.tsx`'s `dynamic(HomeView, { ssr: false })`), so
+  there's no server-rendered logged-in UI to hydration-mismatch against,
+  and this avoids a logged-out→logged-in flash on every reload.
+- All `sessionStorage` access is `typeof window` -guarded and wrapped in
+  `try/catch` (privacy modes throw on access; quota can fail a write) —
+  a failed write just means the session won't survive a reload, not a
+  crash.
+- **Invalid/expired restored token, two layers:**
+  1. `jwtExpiryMs(token)` decodes the JWT payload's `exp` (no signature
+     check — that's the backend's job) and `readStoredSession` drops a
+     token that's already past `exp` *before* restoring it, removing the
+     stale entry from storage so it can't re-trigger on the next load.
+  2. A token that passes the client-side `exp` check but is rejected
+     server-side (bad signature, revoked) still hits the pre-existing
+     `useModerationActions` path: `CombinedGraphQLErrors` code
+     `UNAUTHORIZED` → `logout()` → which now also clears storage → UI
+     falls back to the logged-out state (the "Moderator" login link
+     returns) instead of staying stuck showing "logged in" while every
+     action 401s. The original plan's "expired/invalid JWT should prompt
+     re-login rather than fail silently" — confirmed still holds.
+- Minor: `login`/`logout` are now `useCallback`-stable and the context
+  value is `useMemo`'d (the original recreated it every render) — a small
+  correctness improvement that also keeps `RootCommentRow`'s `memo` from
+  being defeated by a fresh context value each render.
+
+**Verified manually** (full `docker compose up -d --build` stack —
+frontend image rebuilt — desktop 1280px + mobile 375px, all assertions via
+DOM + `sessionStorage`/`localStorage` reads, not just screenshots):
+- Log in → `sessionStorage["dedcomments.moderatorSession"]` written (JWT
+  with `exp` = `iat + 86400`), `localStorage` untouched.
+- **Reload (F5)** → still logged in, "Moderator: moderator" + Log out in
+  the header, 25 Hide + 25 Ban author buttons on the table, no "Moderator"
+  login link, no credential re-entry. Confirmed desktop **and** 375px
+  mobile.
+- **New tab** (`context.newPage()` → navigate, i.e. a genuinely fresh
+  browsing context, not a reload) → logged out: "Moderator" login link
+  shown, 0 Hide buttons, `sessionStorage` empty. Correct tab-scoping.
+- **Expired token on restore** — injected a hand-crafted JWT with `exp` in
+  the year 2001 into `sessionStorage`, reloaded → UI logged-out, and the
+  bad entry was **removed from `sessionStorage`** by `readStoredSession`.
+- **Backend-rejected token on restore** — injected a well-formed JWT with
+  `exp` in 2100 but a garbage signature, reloaded → UI restored as
+  "logged in" (client can't verify the signature, expected), then clicked
+  Hide on a comment → backend `UNAUTHORIZED` → `logout()` fired → UI back
+  to logged-out, `sessionStorage` cleared, the target comment **not**
+  hidden (0 hidden / 0 banned in Postgres afterward), zero console errors.
+- **Log out → reload** → still logged out, `sessionStorage` empty.
+- Zero console errors throughout. `tsc --noEmit` / `next build` / `eslint`
+  all clean.
+
+**Deviation:** the `exp` pre-check on restore (`jwtExpiryMs`) is slightly
+beyond a literal "store and restore" — added because it makes the
+expired-token edge case deterministically testable and avoids briefly
+flashing a logged-in UI for a token that's already dead. The plain
+plain-React-state → sessionStorage swap is otherwise exactly as scoped.
+
+**Pending**: unchanged — only the demo video remains from the brief's
+"Delivery format" section.
