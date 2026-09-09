@@ -171,18 +171,27 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
           {item.repliesCount}
         </td>
         <td className={cls.expandCell}>
-          {/* Only reveals nested replies (commentThread) — the comment's own
-           * text/attachment below is always visible, no click needed. */}
-          {hasReplies && (
-            <Button
-              size="sm"
-              variant="clear"
-              aria-expanded={expanded}
-              onClick={() => onToggleExpand(item.id)}
-            >
-              {expanded ? "Collapse" : "Expand"}
-            </Button>
-          )}
+          {/* Always shown, even at 0 replies. The reply form lives *inside*
+           * the thread panel (CommentThreadNode), so this button is the only
+           * entry point for replying to a root comment — gating it on
+           * `repliesCount > 0` left zero-reply roots with no way to be
+           * replied to at all (same gap pattern as the earlier Hide/Ban
+           * fix). With replies it toggles the thread; with none it opens
+           * straight to a reply form. */}
+          <Button
+            size="sm"
+            variant="clear"
+            aria-expanded={expanded}
+            onClick={() => onToggleExpand(item.id)}
+          >
+            {expanded
+              ? hasReplies
+                ? "Collapse"
+                : "Close"
+              : hasReplies
+                ? "Expand"
+                : "Reply"}
+          </Button>
         </td>
       </tr>
 
@@ -249,10 +258,13 @@ const RootCommentRow = memo(function RootCommentRow(props: RootCommentRowProps) 
         </td>
       </tr>
 
-      {expanded && hasReplies && (
+      {expanded && (
         <tr className={cls.threadRow}>
           <td colSpan={5} className={cls.threadCell}>
-            <CommentThread rootId={item.id} />
+            {/* `repliesCount` lets CommentThread skip the `commentThread`
+             * fetch entirely when there's nothing to fetch (0 replies) and
+             * render straight to the reply form. */}
+            <CommentThread rootId={item.id} repliesCount={item.repliesCount} />
           </td>
         </tr>
       )}

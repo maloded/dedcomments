@@ -65,6 +65,22 @@
   padding: var(--space-4);
 }
 
+// Zero-reply root: the panel opens straight to a reply form (see
+// CommentThread.tsx's `skipFetch` branch) — this labels the otherwise-bare
+// panel so "Reply → empty panel" isn't confusing.
+.firstReplyHint {
+  margin: 0 0 var(--space-2);
+  font: var(--font-xs);
+  color: var(--color-text-muted);
+}
+
+// Matches the nudge `.replyForm > div` gives an inline reply box — the form's
+// <Card> reads as "you're composing here" against the thread panel's surface.
+.firstReplyForm {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
 .error {
   color: var(--color-danger);
   margin: 0;

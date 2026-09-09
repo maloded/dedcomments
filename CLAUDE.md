@@ -4318,3 +4318,88 @@ changed, so backend/frontend test suites untouched.
 **Pending**: only the **demo video** remains from the brief's "Delivery
 format" section. Deployment, README, and the MySQL Workbench schema export
 are all done and now verified from a clean clone.
+
+---
+
+### Post-Step-23 fix — Reply unreachable for zero-reply root comments (done)
+
+**Bug, same root-cause pattern as the earlier Hide/Ban gap (Step 22):** the
+inline reply form lives *only* inside `CommentThreadNode`, which mounts only
+when a root's thread panel is expanded — and the "Expand" button in
+`RootCommentsTable` was gated on `repliesCount > 0`. So a root comment with
+**zero replies** had no Expand button, no thread panel, and therefore **no
+way to be replied to at all** — the reply flow was simply unreachable for
+what is often a large fraction of comments (the collapsible form at the top
+of the page only ever posts a *new root*, never a reply to a specific one).
+
+**Fix**
+- `RootCommentsTable` (`RootCommentRow`): the button now renders on **every**
+  root row regardless of `repliesCount`, and the `expanded && hasReplies`
+  gate on the thread `<tr>` became just `expanded`. `repliesCount` is passed
+  through to `<CommentThread>`.
+- **Label decision** (item 4 of the task — "your call on the clearest UX"):
+  the button reads **"Reply"** when `repliesCount === 0` (collapsed) and
+  **"Close"** when that panel is open; it keeps **"Expand"/"Collapse"** when
+  there *are* replies. "Expand" implies there's hidden content to reveal —
+  misleading when there's nothing there — whereas "Reply" names the only
+  action actually available. When a reply is then posted, `repliesCount`
+  ticks to 1 (via the targeted cache write below) and the same open panel's
+  button relabels "Close" → "Collapse" live.
+- `CommentThread` gained a `repliesCount` prop and a `replyPosted` state.
+  `skipFetch = repliesCount === 0 && !replyPosted` — when true, the
+  `commentThread` query is **skipped entirely** (`skip: skipFetch` on the
+  `useQuery`; there's nothing to fetch but `{ root, replies: [] }`) and the
+  panel early-returns a small **"No replies yet — be the first to reply."**
+  line above a bare `<CommentForm parentId={rootId}>` — so clicking "Reply"
+  lands you *directly* on a compose box, not a second "Reply" button, and an
+  expanded-but-otherwise-empty panel isn't puzzling. Posting flips
+  `replyPosted`; Apollo auto-fetches the moment `skip` goes `false`, and the
+  component falls through to the normal thread render (root + the new reply)
+  on the next pass — no explicit `refetch()` needed for that transition.
+- The `.tsx` needs `CommentForm` imported into `CommentThread.tsx` (no new
+  import cycle — `CommentThreadNode` already imported it). Two SCSS classes
+  added (`.firstReplyHint`, `.firstReplyForm`), plus the mobile
+  `.expandCell:has(button)` rule in `RootCommentsTable.module.scss` became
+  unconditional (the button always renders now).
+
+**Item 3 — targeted cache update reused, confirmed via `MutationObserver`:**
+replying to a previously-zero-reply root goes through the exact same path as
+any other reply — `RealtimeConnection.handleReplyCommentEvent` →
+`bumpRepliesCount` (`cache.modify` on the root's normalized `CommentModel`
+entity, `+1`). Measured on the live stack: the row's `repliesCount` cell
+went `0 → 1` as a single `characterData` mutation on that `<td>`'s text node
+(`oldValue: "0"`), the button label as one more `characterData`
+(`"Close" → "Collapse"`), **zero `<tr>` add/remove, zero `Skeleton`
+elements, all 5 row markers survived** — i.e. no `RootComments` refetch, no
+full-table skeleton flicker. The new reply itself renders because the
+skipped query activates and fetches on `replyPosted`.
+
+**Verified manually** (full `docker compose up -d --build` stack — frontend
+image rebuilt, no source mount — desktop 1280px + 375px mobile, CAPTCHA
+answers read from Redis):
+- A zero-reply root shows a **"Reply"** button; clicking it opens the panel
+  with the "No replies yet…" hint + the reply form directly (screenshot).
+- Posted a first reply end-to-end (CAPTCHA, submit): reply appears nested,
+  `repliesCount` → 1 via the targeted `cache.modify` (no skeleton, no `<tr>`
+  teardown, markers intact — see above), the panel switches from form to
+  thread view, button relabels to "Collapse".
+- **Regression — roots that already had replies:** "Expand" unchanged,
+  thread + connector lines + collapse toggle render as before; a nested
+  reply into an already-populated thread still works, still leaves the
+  *root's direct* `repliesCount` untouched (reply-to-a-reply isn't a direct
+  reply — matches `repliesCount` semantics), still no full-table refetch.
+- Mobile 375px: "Reply"/"Close" button in the stacked layout, panel opens,
+  `document.documentElement.scrollWidth === clientWidth` (no h-overflow).
+- **Zero console errors/warnings** throughout. `tsc --noEmit` / `next build`
+  (via the Docker image build) / `eslint` all clean — only the one
+  pre-existing, unrelated React Compiler info-warning on `CommentForm`'s
+  `watch()` seen in every prior frontend session.
+
+Test data cleaned up afterward (`DELETE FROM comments; DELETE FROM authors`
++ `rootComments:*` Redis flush) — dev DB left minimal as before.
+
+**Deviation:** none beyond the label choice, which the task explicitly left
+to this session's judgment.
+
+**Pending**: unchanged — only the **demo video** remains from the brief's
+"Delivery format" section.

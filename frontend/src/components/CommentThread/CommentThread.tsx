@@ -6,11 +6,17 @@ import { CommentThreadDocument } from "@/graphql/generated";
 import { Skeleton } from "@/shared/ui/Skeleton";
 import { Button } from "@/shared/ui/Button";
 import { CommentThreadNode, type ThreadNode } from "./CommentThreadNode";
+import { CommentForm } from "@/components/CommentForm";
 import { useConnectorLines } from "./useConnectorLines";
 import cls from "./CommentThread.module.scss";
 
 interface CommentThreadProps {
   rootId: string;
+  /** Direct reply count from the parent `RootComments` row. When 0 — and no
+   * reply has been posted from this panel yet — the `commentThread` query is
+   * skipped entirely (there's nothing to fetch but `{ root, replies: [] }`)
+   * and the panel renders straight to a reply form. */
+  repliesCount: number;
 }
 
 // How far the elbow curves before running straight into the child avatar —
@@ -61,12 +67,24 @@ function findNode(node: ThreadNode, id: string): ThreadNode | null {
  * behind.
  */
 export function CommentThread(props: CommentThreadProps) {
-  const { rootId } = props;
+  const { rootId, repliesCount } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const [rerootStack, setRerootStack] = useState<string[]>([]);
+  // Flips once a reply is posted from the zero-reply "first reply" state
+  // (see the `skipFetch` early return below) — un-skips the query so the
+  // freshly-created reply and the now-non-empty thread load and render normally.
+  const [replyPosted, setReplyPosted] = useState(false);
+
+  // A root with no replies has an empty subtree — firing `commentThread` just
+  // to get `{ root, replies: [] }` back is a pointless round-trip. Skip it and
+  // go straight to the reply affordance; Apollo auto-fetches the moment `skip`
+  // goes false (when `replyPosted` flips), so nothing extra is needed to load
+  // the thread after that first reply.
+  const skipFetch = repliesCount === 0 && !replyPosted;
 
   const { data, loading, error, refetch } = useQuery(CommentThreadDocument, {
     variables: { rootId },
+    skip: skipFetch,
   });
 
   const root = data ? (data.commentThread as unknown as ThreadNode) : null;
@@ -88,6 +106,24 @@ export function CommentThread(props: CommentThreadProps) {
 
   function backToParentThread() {
     setRerootStack((stack) => stack.slice(0, -1));
+  }
+
+  // Zero-reply root, nothing posted yet: there's no thread to fetch or render,
+  // so drop straight to a reply form. The one-liner keeps an expanded-but-bare
+  // panel from being puzzling ("I clicked expand and there's nothing here").
+  // Posting flips `replyPosted`, which un-skips the query above and falls
+  // through to the normal thread render below on the next pass.
+  if (skipFetch) {
+    return (
+      <div className={cls.CommentThread}>
+        <p className={cls.firstReplyHint}>No replies yet — be the first to reply.</p>
+        <CommentForm
+          className={cls.firstReplyForm}
+          parentId={rootId}
+          onSuccess={() => setReplyPosted(true)}
+        />
+      </div>
+    );
   }
 
   if (loading && !data) {

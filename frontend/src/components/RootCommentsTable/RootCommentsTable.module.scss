@@ -364,14 +364,11 @@
       height: 22px;
     }
 
-    // Only meaningful when a button actually renders inside it (hidden
-    // entirely when repliesCount is 0) — an empty cell shouldn't reserve a gap.
+    // The Expand/Reply button always renders now (it's the only way to reach
+    // a reply form for a root comment) — give it a consistent gap from the row.
     .expandCell {
       text-align: left;
-
-      &:has(button) {
-        margin-top: var(--space-1);
-      }
+      margin-top: var(--space-1);
     }
   }
 }
