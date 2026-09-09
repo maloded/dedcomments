@@ -4462,3 +4462,54 @@ Test data cleaned up afterward (`DELETE FROM comments; DELETE FROM authors`
 
 **Pending**: unchanged — only the **demo video** remains from the brief's
 "Delivery format" section.
+
+---
+
+### Pre-submission check — MySQL Workbench schema export re-verified against
+the current Prisma schema (in sync, no regeneration needed)
+
+Verified `docs/db-schema-mysql-workbench.sql` still accurately represents
+`backend/prisma/schema.prisma` before final submission, since the file was
+generated during the delivery phase and several backend/frontend sessions
+followed.
+
+**Git-history check — no migration landed after the MySQL file was
+generated:**
+- `docs/db-schema-mysql-workbench.sql` was last committed `aa3debb`
+  (2026-09-05).
+- The last change to `backend/prisma/schema.prisma` was `0a208a5`
+  (2026-09-03), and the newest migration directory is
+  `20260903122801_author_lowercase_sort_columns` (2026-09-03).
+- Every backend/frontend session since 2026-09-05 (Steps 20-23 and the
+  post-step fixes) touched resolvers, services, GraphQL models, frontend
+  code, deployment, and docs — **none touched `schema.prisma` or added a
+  migration**. The MySQL file was written two days *after* the last schema
+  change, so it captured the final state.
+
+**Field-by-field diff (final migrated Postgres state ↔ MySQL DDL) — all
+match:**
+- `authors`: `id`, `username`, `email`, `homepage?`, `usernameLower`,
+  `emailLower`, `isBanned` (default false), `createdAt`; unique
+  `(username, email)`; indexes on `username`, `email`, `usernameLower`,
+  `emailLower`. ✓
+- `comments`: `id`, `text`, `authorId`, `parentId?`, `isHidden` (default
+  false), `createdAt`; indexes on `createdAt`, `parentId`,
+  `(parentId, createdAt)`; FK `authorId → authors` (RESTRICT / UPDATE
+  CASCADE), self-FK `parentId → comments` (CASCADE / CASCADE). ✓
+- `attachments`: `id`, `commentId?` (unique), `type` enum
+  (`IMAGE` | `TEXT`), `url`, `originalName`, `size`, `processedAt?`,
+  `createdAt`; FK `commentId → comments` (CASCADE / CASCADE). ✓
+- `moderators`: `id`, `username` (unique), `passwordHash`, `createdAt`. ✓
+- `captcha_challenges`: dropped by migration
+  `20260902153834_drop_captcha_challenge`, correctly absent from the MySQL
+  file (Redis-only, documented). ✓
+
+The only Postgres→MySQL translation liberties (`CHAR(36)` for UUID text,
+`TINYINT(1)` for boolean, `DATETIME(3)` for `DateTime`, native `ENUM`,
+`INT UNSIGNED` for a non-negative file `size`, `VARCHAR` sizing) are all
+already documented in the file's own header "Translation notes" — they are
+deliberate, not drift.
+
+**Result: in sync. No regeneration performed** (per instruction — don't
+regenerate unnecessarily). No SQL file changed; this Progress-log entry is
+the only change.
