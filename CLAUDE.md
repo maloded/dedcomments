@@ -4403,3 +4403,62 @@ to this session's judgment.
 
 **Pending**: unchanged — only the **demo video** remains from the brief's
 "Delivery format" section.
+
+---
+
+### Post-Step-23 fix — "Comment posted." success banner lingered into a new
+comment (done)
+
+**Bug:** after a successful post, `CommentForm` shows a "Comment posted."
+confirmation and resets the fields — but `successMessage` was only ever
+cleared at the *start of the next `onSubmit`*. Because `CollapsibleCommentForm`
+keeps `CommentForm` permanently mounted (it only clips the form's grid row
+on collapse — the "animate to/from real content height" fix from an earlier
+step), that stale banner survived a collapse → re-expand and sat above a
+freshly-blank form while the reader typed their next comment, only clearing
+if and when they hit submit.
+
+**Fix:** an `onInput` handler on the `<form>` element clears `successMessage`
+the moment the reader starts composing again. `input` events from any field
+(username, email, homepage, text, CAPTCHA) bubble to the form, so one
+handler covers all of them; a programmatic `reset()` / `setValue()` (the
+post-submit reset, the tag-toolbar buttons) does **not** dispatch an `input`
+event, so the banner isn't cleared by its own reset the instant it appears.
+Guarded with `if (successMessage)` so it's a no-op after the first keystroke.
+
+**Reply forms:** same `CommentForm` component, so the fix applies there too
+— but the lingering-banner symptom never actually manifested for replies:
+`CommentThreadNode`'s reply form closes/unmounts on success (`closeReply()`
+in `onSuccess`), and `CommentThread`'s first-reply form swaps to the thread
+view once `replyPosted` flips, so the banner never gets a chance to persist.
+Verified a reply still posts cleanly with no leftover banner regardless.
+
+**Scope kept tight:** only `successMessage` is touched. `formError`
+(THROTTLER / banned-author / unmapped errors) and the RHF field errors
+(CAPTCHA-incorrect, validation) are untouched — they still show and clear on
+their own triggers, confirmed below.
+
+**Verified manually** (full `docker compose up -d --build` stack, frontend
+image rebuilt — desktop 1280px + mobile 375px):
+- Posted a comment → "Comment posted." shows, form collapses; re-expanded
+  the form → banner still there (the exact reported scenario); typed one
+  character in **User Name** → banner gone immediately, no submit. Repeated
+  targeting the **text textarea** and (on mobile) the **e-mail** field —
+  banner cleared on the first `input` event each time.
+- Regression — error handling intact: submitting an empty form still shows
+  the three field-required errors; a wrong CAPTCHA still shows "Incorrect
+  CAPTCHA — a new one has been loaded." + auto-loads a fresh challenge +
+  preserves the other field values; retyping the correct answer from the
+  new challenge then posts successfully (full bad→good recovery flow).
+- Zero console errors/warnings throughout; no horizontal overflow at 375px.
+- `tsc --noEmit` clean; `eslint` clean (only the pre-existing, unrelated
+  React Compiler info-warning on `CommentForm`'s `watch()`); `next build`
+  succeeds (ran in the Docker image build).
+
+Test data cleaned up afterward (`DELETE FROM comments; DELETE FROM authors`
++ `rootComments:*` Redis flush) — dev DB left minimal as before.
+
+**Deviation:** none — scoped exactly to the reported bug.
+
+**Pending**: unchanged — only the **demo video** remains from the brief's
+"Delivery format" section.

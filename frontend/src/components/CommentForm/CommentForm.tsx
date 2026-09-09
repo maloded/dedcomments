@@ -442,6 +442,14 @@ export function CommentForm(props: CommentFormProps) {
         onSubmit={(e) => {
           void handleSubmit(onSubmit)(e);
         }}
+        // Drop the "Comment posted." confirmation the moment the reader starts
+        // composing a new comment. `input` events from any field (username,
+        // email, homepage, text, CAPTCHA) bubble to the form; a programmatic
+        // `reset()` / `setValue()` does not fire one, so this only reacts to
+        // real typing. Guarded so it's a no-op after the first keystroke.
+        onInput={() => {
+          if (successMessage) setSuccessMessage(null);
+        }}
         noValidate
       >
         <div className={cls.headingRow}>
