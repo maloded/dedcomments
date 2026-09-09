@@ -500,5 +500,6 @@ The **reviewed live instance** (see also [Two ways to review this project](#two-
 - This is a separate concern from [running locally from scratch](#running-from-scratch) —
   the local instructions never touch this deployment.
 
-**Demo video**: _TODO — a short screen recording of the deployed app is still to be
-recorded; it's the one remaining item from the brief's "Delivery format" section._
+**Demo video**: a short screen recording of the deployed app, walking through the
+implemented functionality —
+<https://drive.google.com/file/d/1verFXh8HptJSUHoWRBEr4HRkYvdO5Cwj/view?usp=sharing>
